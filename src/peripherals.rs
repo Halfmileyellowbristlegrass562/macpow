@@ -315,8 +315,14 @@ pub fn read_bluetooth_devices() -> Vec<BluetoothDevice> {
         _ => return Vec::new(),
     };
 
-    // Parse raw entries: (name, id, battery_pct, is_charging)
-    let mut raw: Vec<(String, u64, String, bool)> = Vec::new();
+    struct Entry {
+        name: String,
+        id: u64,
+        pct: String,
+        status: String,
+    }
+
+    let mut raw: Vec<Entry> = Vec::new();
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("-InternalBattery")
@@ -327,74 +333,85 @@ pub fn read_bluetooth_devices() -> Vec<BluetoothDevice> {
         }
         if let Some(name_end) = trimmed.find(" (id=") {
             let name = trimmed[1..name_end].trim_start_matches('-').trim();
-            let id_str = trimmed[name_end + 5..].split(')').next().unwrap_or("0");
-            let id: u64 = id_str.parse().unwrap_or(0);
+            let id: u64 = trimmed[name_end + 5..]
+                .split(')')
+                .next()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
             let after_tab = trimmed.split('\t').nth(1).unwrap_or("");
             let pct = after_tab.split('%').next().unwrap_or("").trim();
-            let is_charging = after_tab.contains("charging") && !after_tab.contains("discharging");
+
+            let segments: Vec<&str> = after_tab.split(';').collect();
+            let is_charging = segments.len() >= 2
+                && segments[1].contains("charging")
+                && !segments[1].contains("discharging");
+            let mut status = String::new();
+            if is_charging {
+                let time_seg = segments.get(2).unwrap_or(&"").trim();
+                let time = time_seg
+                    .replace("remaining", "")
+                    .replace("present: true", "")
+                    .trim()
+                    .to_string();
+                if !time.is_empty() && time != "0:00" {
+                    status = format!("charging, {} left", time);
+                } else {
+                    status = "charged".to_string();
+                }
+            }
+
             if !name.is_empty() && !pct.is_empty() {
-                raw.push((name.to_string(), id, format!("{}%", pct), is_charging));
+                raw.push(Entry {
+                    name: name.to_string(),
+                    id,
+                    pct: format!("{}%", pct),
+                    status,
+                });
             }
         }
     }
 
-    // Sort by id so lower id = Left, higher id = Right
-    raw.sort_by_key(|r| r.1);
+    raw.sort_by_key(|r| r.id);
 
-    // Group by base name: "X Case" → child of "X", duplicate "X" → Left/Right
-    let mut devices: Vec<BluetoothDevice> = Vec::new();
     let mut name_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-
-    for (name, _, _, _) in &raw {
-        if !name.ends_with(" Case") {
-            *name_counts.entry(name.clone()).or_insert(0) += 1;
+    for e in &raw {
+        if !e.name.ends_with(" Case") {
+            *name_counts.entry(e.name.clone()).or_insert(0) += 1;
         }
     }
 
-    let mut seen_base: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for (name, _, pct, is_charging) in &raw {
-        if name.ends_with(" Case") {
-            let base = name.trim_end_matches(" Case");
-            let idx = devices.iter().position(|d| d.name == base);
-            if let Some(i) = idx {
-                devices[i].batteries.push(("Case".to_string(), pct.clone()));
-            } else {
-                devices.push(BluetoothDevice {
-                    name: base.to_string(),
-                    minor_type: String::new(),
-                    connected: true,
-                    batteries: vec![("Case".to_string(), pct.clone())],
-                });
-            }
+    let mut devices: Vec<BluetoothDevice> = Vec::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for e in &raw {
+        let display_name = if e.name.ends_with(" Case") {
+            e.name.clone()
         } else {
-            let count = name_counts.get(name.as_str()).copied().unwrap_or(1);
-            let nth = seen_base.entry(name.clone()).or_insert(0);
-            let label = if count >= 2 {
-                // Lower id = Left (sorted first), higher = Right
-                let suffix = if *is_charging { ", in case" } else { "" };
-                let l = if *nth == 0 {
-                    format!("Left{}", suffix)
-                } else {
-                    format!("Right{}", suffix)
-                };
+            let count = name_counts.get(&e.name).copied().unwrap_or(1);
+            if count >= 2 {
+                let nth = seen.entry(e.name.clone()).or_insert(0);
+                let side = if *nth == 0 { "Left" } else { "Right" };
                 *nth += 1;
-                l
+                format!("{} ({})", e.name, side)
             } else {
-                String::new()
-            };
-            let idx = devices.iter().position(|d| d.name == *name);
-            if let Some(i) = idx {
-                devices[i].batteries.push((label, pct.clone()));
-            } else {
-                devices.push(BluetoothDevice {
-                    name: name.clone(),
-                    minor_type: String::new(),
-                    connected: true,
-                    batteries: vec![(label, pct.clone())],
-                });
+                e.name.clone()
             }
-        }
+        };
+
+        let battery_str = if e.status.is_empty() {
+            e.pct.clone()
+        } else {
+            format!("{}, {}", e.pct, e.status)
+        };
+
+        devices.push(BluetoothDevice {
+            name: display_name,
+            minor_type: String::new(),
+            connected: true,
+            batteries: vec![(String::new(), battery_str)],
+        });
     }
 
     devices
