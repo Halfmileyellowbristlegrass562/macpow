@@ -1,5 +1,10 @@
 # macpow
 
+[![CI](https://github.com/k06a/macpow/actions/workflows/ci.yml/badge.svg)](https://github.com/k06a/macpow/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/macpow)](https://crates.io/crates/macpow)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple)](https://github.com/k06a/macpow)
+
 Real-time power consumption monitor for Apple Silicon Macs (M1–M5+).
 
 <p align="center">
