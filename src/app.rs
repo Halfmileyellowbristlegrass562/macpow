@@ -2138,12 +2138,7 @@ impl App {
                 if remainder > 0 {
                     let y = bottom_y.saturating_sub(full_rows as u16);
                     if y >= chart_inner.y {
-                        buf.set_string(
-                            x,
-                            y,
-                            BAR_EIGHTHS[remainder].to_string(),
-                            style,
-                        );
+                        buf.set_string(x, y, BAR_EIGHTHS[remainder].to_string(), style);
                     }
                 }
             }
