@@ -824,7 +824,14 @@ impl App {
         let s = &self.sma;
         let pin = |key: &str| -> bool { self.pinned.contains(&key) };
 
-        let temp_groups = temps_by_category(&m.temperatures);
+        let e_count: usize = m.soc.ecpu_clusters.iter().map(|c| c.cores.len()).sum();
+        let p_count = m.soc.pcpu_cluster.cores.len();
+        let (e_temps, p_temps) = selected_cpu_core_temps(&m.temperatures, e_count, p_count);
+        let mut temp_groups = temps_by_category(&m.temperatures);
+        let cpu_display_temps: Vec<f32> = e_temps.iter().chain(p_temps.iter()).copied().collect();
+        if !cpu_display_temps.is_empty() {
+            temp_groups.insert("CPU".to_string(), cpu_display_temps);
+        }
         let temps_pending = m.temperatures.is_empty();
         let temp_info = |cat: &str| -> String {
             temp_groups
@@ -947,8 +954,6 @@ impl App {
             ));
         } else {
             let soc_wh = w.cpu + w.gpu + w.ane + w.dram + w.gpu_sram;
-            let e_count: usize = m.soc.ecpu_clusters.iter().map(|c| c.cores.len()).sum();
-            let p_count = m.soc.pcpu_cluster.cores.len();
             let cp = c("soc");
 
             rows.push(TreeRow::pw(
@@ -999,15 +1004,6 @@ impl App {
                 Style::default(),
                 pin("cpu"),
             ));
-            // Assign CPU temp sensors to cores (sorted Tp0* keys map to cores in order)
-            let mut cpu_temps: Vec<f32> = m
-                .temperatures
-                .iter()
-                .filter(|t| t.category == "CPU" && t.key.starts_with("Tp0"))
-                .map(|t| t.value_celsius)
-                .collect();
-            let e_temps: Vec<f32> = cpu_temps.drain(..e_count.min(cpu_temps.len())).collect();
-            let p_temps: Vec<f32> = cpu_temps.drain(..p_count.min(cpu_temps.len())).collect();
             let e_avg_temp = if e_temps.is_empty() {
                 String::new()
             } else {
@@ -2073,6 +2069,75 @@ fn temps_by_category(temps: &[TempSensor]) -> BTreeMap<String, Vec<f32>> {
         })
 }
 
+fn selected_cpu_core_temps(
+    temps: &[TempSensor],
+    e_count: usize,
+    p_count: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let mut e_temps = Vec::new();
+    let mut p_temps = Vec::new();
+
+    let e_candidates = sorted_temp_values(temps, |key| key.starts_with("Tex"));
+    if e_count > 0 && e_candidates.len() == e_count {
+        e_temps = e_candidates;
+    }
+
+    let p_triplets = sorted_temp_values(temps, |key| {
+        key.starts_with("Tp1") || key.starts_with("Tp2")
+    });
+    if p_count > 0 && p_triplets.len() == p_count * 3 {
+        p_temps = p_triplets
+            .chunks_exact(3)
+            .map(|chunk| chunk.iter().copied().fold(f32::NEG_INFINITY, f32::max))
+            .collect();
+    }
+
+    if e_temps.len() == e_count && p_temps.len() == p_count {
+        return (e_temps, p_temps);
+    }
+
+    let fallback = sorted_temp_values(temps, |key| key.starts_with("Tp0"));
+    if fallback.len() >= e_count + p_count
+        && !is_placeholder_temp_bank(&fallback, e_count + p_count)
+    {
+        if e_temps.len() != e_count {
+            e_temps = fallback.iter().take(e_count).copied().collect();
+        }
+        if p_temps.len() != p_count {
+            p_temps = fallback
+                .iter()
+                .skip(e_count)
+                .take(p_count)
+                .copied()
+                .collect();
+        }
+    }
+
+    (e_temps, p_temps)
+}
+
+fn sorted_temp_values<F>(temps: &[TempSensor], predicate: F) -> Vec<f32>
+where
+    F: Fn(&str) -> bool,
+{
+    let mut vals: Vec<_> = temps
+        .iter()
+        .filter(|t| t.category == "CPU" && predicate(&t.key))
+        .map(|t| (t.key.as_str(), t.value_celsius))
+        .collect();
+    vals.sort_by(|a, b| a.0.cmp(b.0));
+    vals.into_iter().map(|(_, temp)| temp).collect()
+}
+
+fn is_placeholder_temp_bank(vals: &[f32], expected_count: usize) -> bool {
+    if vals.len() <= expected_count.saturating_mul(2) {
+        return false;
+    }
+    let min = vals.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = vals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    max - min < 0.25
+}
+
 fn stats(vals: &[f32]) -> (f32, f32, f32) {
     let sum: f32 = vals.iter().sum();
     let min = vals.iter().copied().fold(f32::INFINITY, f32::min);
@@ -2138,5 +2203,69 @@ fn read_machine_name() -> String {
         (Some(c), None) => c,
         (None, Some(m)) => m,
         _ => "Mac".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cpu_sensor(key: &str, temp: f32) -> TempSensor {
+        TempSensor {
+            key: key.to_string(),
+            category: "CPU".to_string(),
+            value_celsius: temp,
+        }
+    }
+
+    #[test]
+    fn selects_modern_cpu_core_temps() {
+        let mut temps = vec![
+            cpu_sensor("Tex2", 42.0),
+            cpu_sensor("Tex0", 40.0),
+            cpu_sensor("Tex3", 43.0),
+            cpu_sensor("Tex1", 41.0),
+        ];
+
+        for (idx, base) in [50.0, 55.0, 60.0, 65.0].into_iter().enumerate() {
+            temps.push(cpu_sensor(&format!("Tp1{}a", idx), base - 10.0));
+            temps.push(cpu_sensor(&format!("Tp1{}b", idx), base - 5.0));
+            temps.push(cpu_sensor(&format!("Tp1{}c", idx), base));
+        }
+        for (idx, base) in [70.0, 71.0, 72.0, 73.0, 74.0, 75.0].into_iter().enumerate() {
+            temps.push(cpu_sensor(&format!("Tp2{}a", idx), base - 10.0));
+            temps.push(cpu_sensor(&format!("Tp2{}b", idx), base - 5.0));
+            temps.push(cpu_sensor(&format!("Tp2{}c", idx), base));
+        }
+
+        let (e_temps, p_temps) = selected_cpu_core_temps(&temps, 4, 10);
+        assert_eq!(e_temps, vec![40.0, 41.0, 42.0, 43.0]);
+        assert_eq!(
+            p_temps,
+            vec![50.0, 55.0, 60.0, 65.0, 70.0, 71.0, 72.0, 73.0, 74.0, 75.0]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_legacy_tp0_mapping() {
+        let temps: Vec<_> = (0..14)
+            .map(|idx| cpu_sensor(&format!("Tp0{idx:02}"), 35.0 + idx as f32))
+            .collect();
+        let (e_temps, p_temps) = selected_cpu_core_temps(&temps, 4, 10);
+        assert_eq!(e_temps, vec![35.0, 36.0, 37.0, 38.0]);
+        assert_eq!(
+            p_temps,
+            vec![39.0, 40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0]
+        );
+    }
+
+    #[test]
+    fn ignores_flat_placeholder_tp0_bank() {
+        let temps: Vec<_> = (0..40)
+            .map(|idx| cpu_sensor(&format!("Tp0{idx:02}"), 40.0))
+            .collect();
+        let (e_temps, p_temps) = selected_cpu_core_temps(&temps, 4, 10);
+        assert!(e_temps.is_empty());
+        assert!(p_temps.is_empty());
     }
 }

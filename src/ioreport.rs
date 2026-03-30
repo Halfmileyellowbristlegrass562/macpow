@@ -7,6 +7,7 @@ use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::CFTypeRef;
 use core_foundation_sys::dictionary::{CFDictionaryRef, CFMutableDictionaryRef};
 use core_foundation_sys::string::CFStringRef;
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::{PhantomData, PhantomPinned};
 use std::ptr;
 use std::time::Instant;
@@ -92,6 +93,164 @@ fn energy_to_watts(val: i64, unit: &str, dt_ms: u64) -> f32 {
         "uJ" => per_sec / 1e6,
         "nJ" => per_sec / 1e9,
         _ => 0.0,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+enum CpuKind {
+    Efficiency,
+    Performance,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+struct CpuCoreKey {
+    kind: CpuKind,
+    cluster: usize,
+    core: usize,
+}
+
+fn parse_usize_ascii(s: &str) -> Option<usize> {
+    (!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .then(|| s.parse().ok())
+        .flatten()
+}
+
+fn parse_cpu_stats_core_key(name: &str) -> Option<CpuCoreKey> {
+    let (kind, suffix) = if let Some(rest) = name.strip_prefix("ECPU") {
+        (CpuKind::Efficiency, rest)
+    } else if let Some(rest) = name.strip_prefix("PCPU") {
+        (CpuKind::Performance, rest)
+    } else {
+        return None;
+    };
+
+    if !suffix.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
+    let trimmed = if suffix.len() >= 3 && suffix.ends_with('0') {
+        &suffix[..suffix.len() - 1]
+    } else {
+        suffix
+    };
+
+    let (cluster, core) = if trimmed.len() == 1 {
+        (0, parse_usize_ascii(trimmed)?)
+    } else {
+        let (cluster, core) = trimmed.split_at(trimmed.len() - 1);
+        (parse_usize_ascii(cluster)?, parse_usize_ascii(core)?)
+    };
+
+    Some(CpuCoreKey {
+        kind,
+        cluster,
+        core,
+    })
+}
+
+fn parse_acc_core_key(name: &str, prefix: &str, kind: CpuKind) -> Option<CpuCoreKey> {
+    let rest = name.strip_prefix(prefix)?;
+    let (cluster, core) = if let Some(core) = rest.strip_prefix("_CPU") {
+        (0, parse_usize_ascii(core)?)
+    } else {
+        let (cluster, core) = rest.split_once("_CPU")?;
+        (parse_usize_ascii(cluster)?, parse_usize_ascii(core)?)
+    };
+
+    Some(CpuCoreKey {
+        kind,
+        cluster,
+        core,
+    })
+}
+
+fn parse_acc_cluster_total(name: &str, prefix: &str) -> Option<usize> {
+    let rest = name.strip_prefix(prefix)?;
+    if rest == "_CPU" {
+        Some(0)
+    } else {
+        parse_usize_ascii(rest.strip_suffix("_CPU")?)
+    }
+}
+
+fn parse_legacy_ecpu_core_key(name: &str) -> Option<CpuCoreKey> {
+    let rest = name.strip_prefix("MCPU")?;
+    let (cluster, core) = rest.split_once('_')?;
+    Some(CpuCoreKey {
+        kind: CpuKind::Efficiency,
+        cluster: parse_usize_ascii(cluster)?,
+        core: parse_usize_ascii(core)?,
+    })
+}
+
+fn parse_legacy_ecpu_cluster_total(name: &str) -> Option<usize> {
+    let rest = name.strip_prefix("MCPU")?;
+    (!rest.contains('_'))
+        .then(|| parse_usize_ascii(rest))
+        .flatten()
+}
+
+fn parse_energy_core_key(name: &str) -> Option<CpuCoreKey> {
+    parse_legacy_ecpu_core_key(name)
+        .or_else(|| parse_acc_core_key(name, "EACC", CpuKind::Efficiency))
+        .or_else(|| parse_acc_core_key(name, "PACC", CpuKind::Performance))
+        .or_else(|| {
+            let core = parse_usize_ascii(name.strip_prefix("PACC_")?)?;
+            Some(CpuCoreKey {
+                kind: CpuKind::Performance,
+                cluster: 0,
+                core,
+            })
+        })
+}
+
+fn parse_energy_cluster_total(name: &str) -> Option<(CpuKind, usize)> {
+    parse_legacy_ecpu_cluster_total(name)
+        .map(|cluster| (CpuKind::Efficiency, cluster))
+        .or_else(|| {
+            parse_acc_cluster_total(name, "EACC").map(|cluster| (CpuKind::Efficiency, cluster))
+        })
+        .or_else(|| {
+            parse_acc_cluster_total(name, "PACC").map(|cluster| (CpuKind::Performance, cluster))
+        })
+        .or_else(|| (name == "PCPU").then_some((CpuKind::Performance, 0)))
+}
+
+fn default_core_name(key: CpuCoreKey, multi_cluster: bool) -> String {
+    let prefix = match key.kind {
+        CpuKind::Efficiency => "ECPU",
+        CpuKind::Performance => "PCPU",
+    };
+
+    if multi_cluster {
+        format!("{prefix}{}_{}", key.cluster, key.core)
+    } else {
+        format!("{prefix}{}", key.core)
+    }
+}
+
+fn cluster_total_from_cores(
+    keys: &[CpuCoreKey],
+    power: &BTreeMap<CpuCoreKey, (String, f32)>,
+) -> f32 {
+    keys.iter()
+        .map(|key| power.get(key).map(|(_, watts)| *watts).unwrap_or(0.0))
+        .sum()
+}
+
+fn build_ordered_keys(
+    stats_order: &[CpuCoreKey],
+    power: &BTreeMap<CpuCoreKey, (String, f32)>,
+    kind: CpuKind,
+) -> Vec<CpuCoreKey> {
+    if !stats_order.is_empty() {
+        stats_order.to_vec()
+    } else {
+        power
+            .keys()
+            .copied()
+            .filter(|key| key.kind == kind)
+            .collect()
     }
 }
 
@@ -392,14 +551,14 @@ impl IOReportSampler {
 
             let mut soc = SocPower::default();
 
-            // Temporary maps for per-core data.
-            // E-core clusters: MCPU0_0..MCPU0_N, MCPU1_0..MCPU1_N, etc.
-            // P-core individual: PACC_0..PACC_N (per-core power accounting)
-            use std::collections::BTreeMap;
-            let mut ecpu_cores: BTreeMap<String, BTreeMap<String, f32>> = BTreeMap::new();
-            let mut pcpu_cores: BTreeMap<String, f32> = BTreeMap::new();
-            let mut ecpu_totals: BTreeMap<String, f32> = BTreeMap::new();
-            let mut pcpu_total: f32 = 0.0;
+            let mut ecpu_order: Vec<CpuCoreKey> = Vec::new();
+            let mut pcpu_order: Vec<CpuCoreKey> = Vec::new();
+            let mut seen_stats_keys: BTreeSet<CpuCoreKey> = BTreeSet::new();
+
+            let mut ecpu_power: BTreeMap<CpuCoreKey, (String, f32)> = BTreeMap::new();
+            let mut pcpu_power: BTreeMap<CpuCoreKey, (String, f32)> = BTreeMap::new();
+            let mut ecpu_totals: BTreeMap<usize, (String, f32)> = BTreeMap::new();
+            let mut pcpu_totals: BTreeMap<usize, (String, f32)> = BTreeMap::new();
 
             // Frequency tracking: (state_index, residency_ns) per core
             let mut ecpu_freq_residency: Vec<(usize, i64)> = Vec::new();
@@ -421,8 +580,30 @@ impl IOReportSampler {
 
                 if group == "CPU Stats" || group == "GPU Stats" {
                     let state_count = IOReportStateGetCount(ch);
-                    let is_ecpu = name.starts_with("ECPU") || name.starts_with("MCPU");
-                    let is_pcpu = name.starts_with("PCPU") || name.starts_with("PACC");
+                    let stats_key = parse_cpu_stats_core_key(&name);
+                    if let Some(key) = stats_key {
+                        if seen_stats_keys.insert(key) {
+                            match key.kind {
+                                CpuKind::Efficiency => ecpu_order.push(key),
+                                CpuKind::Performance => pcpu_order.push(key),
+                            }
+                        }
+                    }
+
+                    let is_ecpu = matches!(
+                        stats_key,
+                        Some(CpuCoreKey {
+                            kind: CpuKind::Efficiency,
+                            ..
+                        })
+                    );
+                    let is_pcpu = matches!(
+                        stats_key,
+                        Some(CpuCoreKey {
+                            kind: CpuKind::Performance,
+                            ..
+                        })
+                    );
                     let is_gpu = group == "GPU Stats";
 
                     // Skip IDLE/DOWN/OFF states, collect (index, residency) for active states
@@ -481,36 +662,6 @@ impl IOReportSampler {
                     n if n.ends_with("CPU Energy") => {
                         soc.cpu_w += watts;
                     }
-                    // E-core per-core: MCPU0_0 (M1-M3), ECPU0_0 (M4+)
-                    n if (n.starts_with("MCPU") || n.starts_with("ECPU"))
-                        && n.contains('_')
-                        && !n.contains("SRAM")
-                        && !n.contains("DTL") =>
-                    {
-                        if let Some(pos) = n.find('_') {
-                            let cluster = &n[..pos];
-                            let core_name = n.to_string();
-                            ecpu_cores
-                                .entry(cluster.to_string())
-                                .or_default()
-                                .insert(core_name, watts);
-                        }
-                    }
-                    // E-core cluster total: MCPU0 (M1-M3), ECPU0 (M4+)
-                    n if (n.starts_with("MCPU") || n.starts_with("ECPU"))
-                        && !n.contains('_')
-                        && !n.contains("DTL") =>
-                    {
-                        ecpu_totals.insert(n.to_string(), watts);
-                    }
-                    // P-core per-core: PACC_0 (M1-M3), PCPU_0 (M4+)
-                    n if n.starts_with("PACC_") || n.starts_with("PCPU_") => {
-                        pcpu_cores.insert(n.to_string(), watts);
-                    }
-                    // P-core cluster total: PCPU (exact, no underscore)
-                    "PCPU" => {
-                        pcpu_total = watts;
-                    }
                     "GPU Energy" => {
                         soc.gpu_w += watts;
                     }
@@ -524,35 +675,98 @@ impl IOReportSampler {
                     n if n.starts_with("GPU SRAM") => {
                         soc.gpu_sram_w += watts;
                     }
-                    _ => {}
+                    _ => {
+                        if let Some(key) = parse_energy_core_key(&name) {
+                            match key.kind {
+                                CpuKind::Efficiency => {
+                                    ecpu_power.insert(key, (name.clone(), watts));
+                                }
+                                CpuKind::Performance => {
+                                    pcpu_power.insert(key, (name.clone(), watts));
+                                }
+                            }
+                        } else if let Some((kind, cluster)) = parse_energy_cluster_total(&name) {
+                            match kind {
+                                CpuKind::Efficiency => {
+                                    ecpu_totals.insert(cluster, (name.clone(), watts));
+                                }
+                                CpuKind::Performance => {
+                                    pcpu_totals.insert(cluster, (name.clone(), watts));
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // Build E-core clusters
-            for (cluster_name, total) in &ecpu_totals {
-                let cores_map = ecpu_cores.remove(cluster_name).unwrap_or_default();
-                let mut cores: Vec<_> = cores_map
+            let ordered_ecpu_keys =
+                build_ordered_keys(&ecpu_order, &ecpu_power, CpuKind::Efficiency);
+            let ordered_pcpu_keys =
+                build_ordered_keys(&pcpu_order, &pcpu_power, CpuKind::Performance);
+
+            let ecpu_cluster_count = ordered_ecpu_keys
+                .iter()
+                .map(|key| key.cluster)
+                .chain(ecpu_totals.keys().copied())
+                .collect::<BTreeSet<_>>()
+                .len();
+            let pcpu_cluster_count = ordered_pcpu_keys
+                .iter()
+                .map(|key| key.cluster)
+                .chain(pcpu_totals.keys().copied())
+                .collect::<BTreeSet<_>>()
+                .len();
+
+            let mut ecpu_keys_by_cluster: BTreeMap<usize, Vec<CpuCoreKey>> = BTreeMap::new();
+            for key in ordered_ecpu_keys {
+                ecpu_keys_by_cluster
+                    .entry(key.cluster)
+                    .or_default()
+                    .push(key);
+            }
+
+            for (cluster, keys) in ecpu_keys_by_cluster {
+                let total_w = ecpu_totals
+                    .get(&cluster)
+                    .map(|(_, watts)| *watts)
+                    .unwrap_or_else(|| cluster_total_from_cores(&keys, &ecpu_power));
+                let name = ecpu_totals
+                    .get(&cluster)
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_else(|| format!("ECPU{cluster}"));
+                let cores = keys
                     .into_iter()
-                    .map(|(name, watts)| crate::types::CpuCore { name, watts })
+                    .map(|key| {
+                        let (name, watts) = ecpu_power.get(&key).cloned().unwrap_or_else(|| {
+                            (default_core_name(key, ecpu_cluster_count > 1), 0.0)
+                        });
+                        crate::types::CpuCore { name, watts }
+                    })
                     .collect();
-                cores.sort_by(|a, b| a.name.cmp(&b.name));
                 soc.ecpu_clusters.push(crate::types::CpuCluster {
-                    name: cluster_name.clone(),
-                    total_w: *total,
+                    name,
+                    total_w,
                     cores,
                 });
             }
-            soc.ecpu_clusters.sort_by(|a, b| a.name.cmp(&b.name));
 
-            // Build P-core cluster
-            let mut p_cores: Vec<_> = pcpu_cores
+            let p_cores: Vec<_> = ordered_pcpu_keys
                 .into_iter()
-                .map(|(name, watts)| crate::types::CpuCore { name, watts })
+                .map(|key| {
+                    let (name, watts) = pcpu_power
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| (default_core_name(key, pcpu_cluster_count > 1), 0.0));
+                    crate::types::CpuCore { name, watts }
+                })
                 .collect();
-            p_cores.sort_by(|a, b| a.name.cmp(&b.name));
             soc.pcpu_cluster = crate::types::CpuCluster {
                 name: "PCPU".to_string(),
-                total_w: pcpu_total,
+                total_w: if pcpu_totals.is_empty() {
+                    p_cores.iter().map(|core| core.watts).sum()
+                } else {
+                    pcpu_totals.values().map(|(_, watts)| *watts).sum()
+                },
                 cores: p_cores,
             };
 
@@ -609,5 +823,67 @@ impl Drop for Sample {
         unsafe {
             cf_utils::cf_release(self.inner as _);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_modern_cpu_stats_names() {
+        assert_eq!(
+            parse_cpu_stats_core_key("ECPU030"),
+            Some(CpuCoreKey {
+                kind: CpuKind::Efficiency,
+                cluster: 0,
+                core: 3,
+            })
+        );
+        assert_eq!(
+            parse_cpu_stats_core_key("PCPU140"),
+            Some(CpuCoreKey {
+                kind: CpuKind::Performance,
+                cluster: 1,
+                core: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_legacy_and_modern_energy_names() {
+        assert_eq!(
+            parse_energy_core_key("MCPU1_2"),
+            Some(CpuCoreKey {
+                kind: CpuKind::Efficiency,
+                cluster: 1,
+                core: 2,
+            })
+        );
+        assert_eq!(
+            parse_energy_core_key("EACC_CPU3"),
+            Some(CpuCoreKey {
+                kind: CpuKind::Efficiency,
+                cluster: 0,
+                core: 3,
+            })
+        );
+        assert_eq!(
+            parse_energy_core_key("PACC1_CPU4"),
+            Some(CpuCoreKey {
+                kind: CpuKind::Performance,
+                cluster: 1,
+                core: 4,
+            })
+        );
+        assert_eq!(
+            parse_energy_cluster_total("EACC_CPU"),
+            Some((CpuKind::Efficiency, 0))
+        );
+        assert_eq!(
+            parse_energy_cluster_total("PACC1_CPU"),
+            Some((CpuKind::Performance, 1))
+        );
+        assert_eq!(parse_energy_core_key("PACC1_CPU5_SRAM"), None);
     }
 }
