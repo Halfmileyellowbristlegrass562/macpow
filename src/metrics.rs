@@ -930,21 +930,12 @@ impl Sampler {
             let m = shared.clone();
             handles.push(std::thread::spawn(move || loop {
                 let devs = peripherals::read_bluetooth_devices();
-                let pw: f32 = devs
-                    .iter()
-                    .map(|d| {
-                        if d.minor_type.contains("Headphone") || d.minor_type.contains("Audio") {
-                            BT_AUDIO_DEVICE_W
-                        } else {
-                            BT_PERIPHERAL_W
-                        }
-                    })
-                    .sum();
+                let pw: f32 = devs.len() as f32 * BT_PERIPHERAL_W;
                 if let Ok(mut mg) = m.lock() {
                     mg.bluetooth_devices = devs;
                     mg.bluetooth_power_w = pw;
                 }
-                std::thread::sleep(Duration::from_secs(30));
+                std::thread::sleep(dt);
             }));
         }
 

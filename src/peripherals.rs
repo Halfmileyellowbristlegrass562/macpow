@@ -304,11 +304,11 @@ pub fn read_wifi_info() -> WifiInfo {
     }
 }
 
-// ── Bluetooth connected devices via system_profiler ──────────────────────────
+// ── Bluetooth devices via pmset -g accps ─────────────────────────────────────
 
 pub fn read_bluetooth_devices() -> Vec<BluetoothDevice> {
-    let output = match std::process::Command::new("system_profiler")
-        .args(["SPBluetoothDataType", "-detailLevel", "basic"])
+    let output = match std::process::Command::new("pmset")
+        .args(["-g", "accps"])
         .output()
     {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
@@ -316,70 +316,37 @@ pub fn read_bluetooth_devices() -> Vec<BluetoothDevice> {
     };
 
     let mut devices = Vec::new();
-    let mut current: Option<BluetoothDevice> = None;
-    let mut in_connected = false;
-
     for line in output.lines() {
         let trimmed = line.trim();
-        let leading_spaces = line.len() - line.trim_start().len();
-
-        // Section headers
-        if trimmed == "Connected:" {
-            in_connected = true;
-            continue;
-        }
-        if trimmed == "Not Connected:" {
-            // Flush last device from Connected section
-            if let Some(dev) = current.take() {
-                devices.push(dev);
-            }
-            in_connected = false;
-            continue;
-        }
-
-        if !in_connected {
-            continue;
-        }
-
-        // Device name: indented line ending with ':', indent ~10
-        if trimmed.ends_with(':')
-            && leading_spaces >= 8
-            && leading_spaces <= 12
-            && !trimmed.contains("Battery")
-            && !trimmed.contains("Version")
+        // Skip internal battery and header lines
+        if trimmed.starts_with("-InternalBattery")
+            || trimmed.starts_with("Now drawing")
+            || trimmed.is_empty()
         {
-            if let Some(dev) = current.take() {
-                devices.push(dev);
-            }
-            current = Some(BluetoothDevice {
-                name: trimmed.trim_end_matches(':').to_string(),
-                connected: true,
-                ..Default::default()
-            });
-        } else if let Some(ref mut dev) = current {
-            if trimmed.starts_with("Minor Type:") {
-                dev.minor_type = trimmed
-                    .strip_prefix("Minor Type:")
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-            } else if trimmed.contains("Battery Level:") {
-                // "Case Battery Level: 7%" → ("Case", "7%")
-                let label = trimmed
-                    .split("Battery Level")
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                let value = trimmed.split(':').nth(1).unwrap_or("").trim().to_string();
-                dev.batteries.push((label, value));
-            }
+            continue;
         }
-    }
-    // Flush last device if we were still in Connected section
-    if in_connected {
-        if let Some(dev) = current.take() {
-            devices.push(dev);
+        // Format: " -DeviceName (id=N)\tPCT%; status; time remaining present: true"
+        if let Some(name_end) = trimmed.find(" (id=") {
+            let name = trimmed[1..name_end].trim_start_matches('-').trim();
+            let after_tab = trimmed.split('\t').nth(1).unwrap_or("");
+            let pct = after_tab.split('%').next().unwrap_or("").trim();
+            if !name.is_empty() {
+                let battery_str = if !pct.is_empty() {
+                    format!("{}%", pct)
+                } else {
+                    String::new()
+                };
+                devices.push(BluetoothDevice {
+                    name: name.to_string(),
+                    minor_type: String::new(),
+                    connected: true,
+                    batteries: if battery_str.is_empty() {
+                        vec![]
+                    } else {
+                        vec![(String::new(), battery_str)]
+                    },
+                });
+            }
         }
     }
 
