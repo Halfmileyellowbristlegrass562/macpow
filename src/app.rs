@@ -587,46 +587,23 @@ impl App {
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         use crossterm::event::KeyCode;
-        use kbd::hotkey::{Hotkey, Modifier};
-        use kbd::key::Key;
-        use kbd_crossterm::CrosstermEventExt;
 
-        // Physical key matching — layout-independent (works for any keyboard layout)
-        if let Some(hotkey) = key.to_hotkey() {
-            if hotkey == Hotkey::new(Key::Q)
-                || hotkey == Hotkey::new(Key::C).modifier(Modifier::Ctrl)
-            {
-                return true;
-            }
-            let h = |k| Hotkey::new(k);
-            if hotkey == h(Key::K) {
-                self.move_cursor(-1);
-                return false;
-            } else if hotkey == h(Key::J) {
-                self.move_cursor(1);
-                return false;
-            } else if hotkey == h(Key::R) {
-                self.reset();
-                return false;
-            } else if hotkey == h(Key::A) {
-                self.cycle_sma();
-                return false;
-            } else if hotkey == h(Key::H) {
-                self.collapse_or_parent();
-                return false;
-            } else if hotkey == h(Key::L) {
-                self.cycle_latency();
-                return false;
-            }
-        }
-
-        // Fallback for non-letter keys and terminals without enhanced keyboard
         match key.code {
-            KeyCode::Esc => return true,
-            KeyCode::Up => self.move_cursor(-1),
-            KeyCode::Down => self.move_cursor(1),
-            KeyCode::Left => self.collapse_or_parent(),
+            KeyCode::Char('q') | KeyCode::Esc => return true,
+            KeyCode::Char('c')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                return true
+            }
+            KeyCode::Char('k') | KeyCode::Up => self.move_cursor(-1),
+            KeyCode::Char('j') | KeyCode::Down => self.move_cursor(1),
+            KeyCode::Char('h') | KeyCode::Left => self.collapse_or_parent(),
             KeyCode::Right => self.expand_or_child(),
+            KeyCode::Char('r') => self.reset(),
+            KeyCode::Char('a') => self.cycle_sma(),
+            KeyCode::Char('l') => self.cycle_latency(),
             KeyCode::Home => self.cursor = 0,
             KeyCode::PageUp => self.move_cursor(-10),
             KeyCode::PageDown => self.move_cursor(10),

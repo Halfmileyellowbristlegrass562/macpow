@@ -379,36 +379,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "kbd"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12e99dee3f3939636e16de08a20a900ffbc942f7d331afb0907b23e4354680eb"
-dependencies = [
- "keyboard-types",
- "thiserror",
-]
-
-[[package]]
-name = "kbd-crossterm"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c3224ae3c8bc1ee7a79eef4607c0ebf2444218af1cde77568156c3f5a8194d9"
-dependencies = [
- "crossterm 0.29.0",
- "kbd",
-]
-
-[[package]]
-name = "keyboard-types"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fbe853b403ae61a04233030ae8a79d94975281ed9770a1f9e246732b534b28d"
-dependencies = [
- "bitflags",
- "serde",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -465,8 +435,6 @@ dependencies = [
  "core-foundation",
  "core-foundation-sys",
  "crossterm 0.29.0",
- "kbd",
- "kbd-crossterm",
  "libc",
  "ratatui",
  "serde",
@@ -757,26 +725,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "thiserror"
-version = "2.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
-dependencies = [
- "thiserror-impl",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "2.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

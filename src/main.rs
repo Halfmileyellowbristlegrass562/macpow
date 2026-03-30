@@ -7,9 +7,6 @@ use anyhow::Result;
 use app::App;
 use clap::Parser;
 use crossterm::event::{self, Event, KeyEventKind};
-use crossterm::event::{
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
-};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -73,7 +70,6 @@ fn run_json(rx: mpsc::Receiver<Metrics>) -> Result<()> {
 }
 
 fn restore_terminal() {
-    let _ = stdout().execute(PopKeyboardEnhancementFlags);
     let _ = stdout().execute(crossterm::event::DisableMouseCapture);
     let _ = disable_raw_mode();
     let _ = stdout().execute(LeaveAlternateScreen);
@@ -86,7 +82,6 @@ fn run_tui(rx: mpsc::Receiver<Metrics>) -> Result<()> {
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(crossterm::event::EnableMouseCapture)?;
-    let _ = stdout().execute(PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::all()));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
         let backend = CrosstermBackend::new(stdout());
