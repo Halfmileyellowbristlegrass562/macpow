@@ -81,13 +81,21 @@ unsafe fn find_storage_stats(entry: u32) -> (u64, u64) {
     const KIO_REGISTRY_ITERATE_RECURSIVELY: u32 = 1;
     let mut child_iter: u32 = 0;
     let plane = b"IOService\0".as_ptr() as *const i8;
-    if IORegistryEntryCreateIterator(entry, plane, KIO_REGISTRY_ITERATE_RECURSIVELY, &mut child_iter) != 0 {
+    if IORegistryEntryCreateIterator(
+        entry,
+        plane,
+        KIO_REGISTRY_ITERATE_RECURSIVELY,
+        &mut child_iter,
+    ) != 0
+    {
         return (0, 0);
     }
     let mut result = (0u64, 0u64);
     loop {
         let child = IOIteratorNext(child_iter);
-        if child == 0 { break; }
+        if child == 0 {
+            break;
+        }
         let mut props: CFMutableDictionaryRef = std::ptr::null_mut();
         if IORegistryEntryCreateCFProperties(child, &mut props, std::ptr::null(), 0) == 0
             && !props.is_null()
@@ -105,7 +113,9 @@ unsafe fn find_storage_stats(entry: u32) -> (u64, u64) {
             cf_utils::cf_release(props as _);
         }
         IOObjectRelease(child);
-        if result.0 > 0 || result.1 > 0 { break; }
+        if result.0 > 0 || result.1 > 0 {
+            break;
+        }
     }
     IOObjectRelease(child_iter);
     result

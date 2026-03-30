@@ -439,7 +439,9 @@ impl IOReportSampler {
                     if is_gpu {
                         for s in 0..offset {
                             let r = IOReportStateGetResidency(ch, s);
-                            if r > 0 { gpu_idle_res += r; }
+                            if r > 0 {
+                                gpu_idle_res += r;
+                            }
                         }
                     }
 
@@ -448,7 +450,9 @@ impl IOReportSampler {
                         if residency <= 0 {
                             continue;
                         }
-                        if is_gpu { gpu_active_res += residency; }
+                        if is_gpu {
+                            gpu_active_res += residency;
+                        }
                         let idx = (s - offset) as usize;
                         let target = if is_gpu {
                             &mut gpu_freq_residency
@@ -581,7 +585,8 @@ impl IOReportSampler {
             // GPU active residency % from IOReport (same method as asitop/mactop)
             let total_gpu_res = gpu_idle_res + gpu_active_res;
             if total_gpu_res > 0 {
-                soc.gpu_util_device = (gpu_active_res as f64 / total_gpu_res as f64 * 100.0).round() as u32;
+                soc.gpu_util_device =
+                    (gpu_active_res as f64 / total_gpu_res as f64 * 100.0).round() as u32;
             }
 
             cf_utils::cf_release(delta as _);

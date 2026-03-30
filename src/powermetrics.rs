@@ -98,14 +98,20 @@ pub fn read_disk_counters() -> DiskCounters {
     use crate::iokit_ffi::*;
     unsafe {
         let matching = IOServiceMatching(b"IOBlockStorageDriver\0".as_ptr() as *const i8);
-        if matching.is_null() { return (0, 0); }
+        if matching.is_null() {
+            return (0, 0);
+        }
         let mut iter: u32 = 0;
-        if IOServiceGetMatchingServices(0, matching, &mut iter) != 0 { return (0, 0); }
+        if IOServiceGetMatchingServices(0, matching, &mut iter) != 0 {
+            return (0, 0);
+        }
         let mut total_read: u64 = 0;
         let mut total_write: u64 = 0;
         loop {
             let entry = IOIteratorNext(iter);
-            if entry == 0 { break; }
+            if entry == 0 {
+                break;
+            }
             let mut props = std::ptr::null_mut();
             if IORegistryEntryCreateCFProperties(entry, &mut props, std::ptr::null(), 0) == 0
                 && !props.is_null()
@@ -115,7 +121,8 @@ pub fn read_disk_counters() -> DiskCounters {
                 if !stats.is_null() {
                     let sd = stats as core_foundation_sys::dictionary::CFDictionaryRef;
                     total_read += cf_utils::cfdict_get_i64(sd, "Bytes (Read)").unwrap_or(0) as u64;
-                    total_write += cf_utils::cfdict_get_i64(sd, "Bytes (Write)").unwrap_or(0) as u64;
+                    total_write +=
+                        cf_utils::cfdict_get_i64(sd, "Bytes (Write)").unwrap_or(0) as u64;
                 }
                 cf_utils::cf_release(props as _);
             }
@@ -128,7 +135,9 @@ pub fn read_disk_counters() -> DiskCounters {
 
 /// Compute disk rates from two counter snapshots.
 pub fn compute_disk_rates(prev: &DiskCounters, cur: &DiskCounters, dt_s: f64) -> DiskInfo {
-    if dt_s <= 0.0 { return DiskInfo::default(); }
+    if dt_s <= 0.0 {
+        return DiskInfo::default();
+    }
     DiskInfo {
         read_bytes_per_sec: cur.0.saturating_sub(prev.0) as f64 / dt_s,
         write_bytes_per_sec: cur.1.saturating_sub(prev.1) as f64 / dt_s,

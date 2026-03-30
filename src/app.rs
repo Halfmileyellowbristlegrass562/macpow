@@ -33,9 +33,9 @@ const SPARK_CHARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇',
 fn power_color(w: f32) -> Color {
     match w {
         w if w < 1.0 => Color::Rgb(46, 139, 87),
-        w if w < 5.0 => Color::Rgb(255, 255, 50),   // lemon yellow
-        w if w < 10.0 => Color::Rgb(255, 140, 0),    // carrot orange
-        _ => Color::Rgb(255, 50, 50),                 // bright red
+        w if w < 5.0 => Color::Rgb(255, 255, 50), // lemon yellow
+        w if w < 10.0 => Color::Rgb(255, 140, 0), // carrot orange
+        _ => Color::Rgb(255, 50, 50),             // bright red
     }
 }
 
@@ -101,6 +101,7 @@ struct TreeRow {
 }
 
 impl TreeRow {
+    #[allow(clippy::too_many_arguments)]
     fn pw(
         key: &'static str,
         parent: Option<&'static str>,
@@ -128,6 +129,7 @@ impl TreeRow {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn pw_full(
         key: &'static str,
         parent: Option<&'static str>,
@@ -353,9 +355,11 @@ impl App {
             history: BTreeMap::new(),
             pinned: Vec::new(),
             collapsed: [
-                "wifi", "ssd", "ecpu", "pcpu", "gpu", "ane",
-                "usb0", "usb1", "usb2", "usb3", "usb4", "usb5", "usb6", "usb7",
-            ].into_iter().collect(),
+                "wifi", "ssd", "ecpu", "pcpu", "gpu", "ane", "usb0", "usb1", "usb2", "usb3",
+                "usb4", "usb5", "usb6", "usb7",
+            ]
+            .into_iter()
+            .collect(),
             total_rows: 0,
             row_keys_cache: Vec::new(),
             row_parents_cache: Vec::new(),
@@ -444,7 +448,13 @@ impl App {
         self.push_history("soc", m.soc.total_w as f64);
         self.push_history("cpu", m.soc.cpu_w as f64);
         self.push_history("ecpu", m.soc.ecpu_total_w() as f64);
-        for (ci, core) in m.soc.ecpu_clusters.iter().flat_map(|cl| cl.cores.iter()).enumerate() {
+        for (ci, core) in m
+            .soc
+            .ecpu_clusters
+            .iter()
+            .flat_map(|cl| cl.cores.iter())
+            .enumerate()
+        {
             let key = proc_key(&mut self.proc_keys, -(ci as i32 + 1000));
             self.push_history(key, core.watts as f64);
         }
@@ -577,7 +587,8 @@ impl App {
         let mut pos = (self.cursor as i32 + delta).clamp(0, max);
         let dir = if delta >= 0 { 1 } else { -1 };
         // Skip separator rows
-        while pos >= 0 && pos <= max && self.row_is_sep.get(pos as usize).copied().unwrap_or(false) {
+        while pos >= 0 && pos <= max && self.row_is_sep.get(pos as usize).copied().unwrap_or(false)
+        {
             pos += dir;
         }
         self.cursor = pos.clamp(0, max) as usize;
@@ -615,7 +626,7 @@ impl App {
         if let Some(Some(key)) = self.row_keys_cache.get(self.cursor) {
             if !self.collapsed.contains(key) {
                 // Check if this node has children (is a parent)
-                if self.row_parents_cache.iter().any(|p| *p == Some(*key)) {
+                if self.row_parents_cache.contains(&Some(*key)) {
                     self.collapsed.insert(*key);
                     return;
                 }
@@ -649,11 +660,9 @@ impl App {
     }
 
     fn collapse_all(&mut self) {
-        for key in &self.row_keys_cache {
-            if let Some(k) = key {
-                if self.row_parents_cache.iter().any(|p| *p == Some(*k)) {
-                    self.collapsed.insert(*k);
-                }
+        for k in self.row_keys_cache.iter().flatten() {
+            if self.row_parents_cache.contains(&Some(*k)) {
+                self.collapsed.insert(*k);
             }
         }
     }
@@ -736,14 +745,22 @@ impl App {
             }
         }
 
-        let cursor_key = self.row_keys_cache.get(self.cursor).copied().flatten()
+        let cursor_key = self
+            .row_keys_cache
+            .get(self.cursor)
+            .copied()
+            .flatten()
             .or_else(|| {
                 // Fall back to parent's key for rows without their own key
                 self.row_parents_cache.get(self.cursor).copied().flatten()
             });
         let chart_keys = self.chart_keys(cursor_key);
         // Always reserve chart space to prevent tree jumping
-        let min_charts = if self.pinned.is_empty() { 1 } else { self.pinned.len() };
+        let min_charts = if self.pinned.is_empty() {
+            1
+        } else {
+            self.pinned.len()
+        };
         let chart_count = chart_keys.len().max(min_charts);
         let chart_h = chart_count as u16 * CHART_HEIGHT;
 
@@ -948,11 +965,27 @@ impl App {
             // Mach API returns P-cores first (perflevel0), then E-cores (perflevel1)
             let cpu_usage = &m.cpu_usage_pct;
             let p_usage: Vec<f32> = cpu_usage.iter().take(p_count).copied().collect();
-            let e_usage: Vec<f32> = cpu_usage.iter().skip(p_count).take(e_count).copied().collect();
-            let e_avg_usage = if e_usage.is_empty() { 0.0 } else { e_usage.iter().sum::<f32>() / e_usage.len() as f32 };
-            let p_avg_usage = if p_usage.is_empty() { 0.0 } else { p_usage.iter().sum::<f32>() / p_usage.len() as f32 };
-            let cpu_avg_usage = if cpu_usage.is_empty() { 0.0 }
-                else { cpu_usage.iter().take(e_count + p_count).sum::<f32>() / (e_count + p_count) as f32 };
+            let e_usage: Vec<f32> = cpu_usage
+                .iter()
+                .skip(p_count)
+                .take(e_count)
+                .copied()
+                .collect();
+            let e_avg_usage = if e_usage.is_empty() {
+                0.0
+            } else {
+                e_usage.iter().sum::<f32>() / e_usage.len() as f32
+            };
+            let p_avg_usage = if p_usage.is_empty() {
+                0.0
+            } else {
+                p_usage.iter().sum::<f32>() / p_usage.len() as f32
+            };
+            let cpu_avg_usage = if cpu_usage.is_empty() {
+                0.0
+            } else {
+                cpu_usage.iter().take(e_count + p_count).sum::<f32>() / (e_count + p_count) as f32
+            };
 
             rows.push(TreeRow::pw_full(
                 "cpu",
@@ -967,26 +1000,30 @@ impl App {
                 pin("cpu"),
             ));
             // Assign CPU temp sensors to cores (sorted Tp0* keys map to cores in order)
-            let mut cpu_temps: Vec<f32> = m.temperatures.iter()
+            let mut cpu_temps: Vec<f32> = m
+                .temperatures
+                .iter()
                 .filter(|t| t.category == "CPU" && t.key.starts_with("Tp0"))
                 .map(|t| t.value_celsius)
                 .collect();
             let e_temps: Vec<f32> = cpu_temps.drain(..e_count.min(cpu_temps.len())).collect();
             let p_temps: Vec<f32> = cpu_temps.drain(..p_count.min(cpu_temps.len())).collect();
-            let e_avg_temp = if e_temps.is_empty() { String::new() }
-                else {
-                    let avg = e_temps.iter().sum::<f32>() / e_temps.len() as f32;
-                    let min = e_temps.iter().copied().fold(f32::INFINITY, f32::min);
-                    let max = e_temps.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                    format!("{:.0}°C ({:.0}–{:.0})", avg, min, max)
-                };
-            let p_avg_temp = if p_temps.is_empty() { String::new() }
-                else {
-                    let avg = p_temps.iter().sum::<f32>() / p_temps.len() as f32;
-                    let min = p_temps.iter().copied().fold(f32::INFINITY, f32::min);
-                    let max = p_temps.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                    format!("{:.0}°C ({:.0}–{:.0})", avg, min, max)
-                };
+            let e_avg_temp = if e_temps.is_empty() {
+                String::new()
+            } else {
+                let avg = e_temps.iter().sum::<f32>() / e_temps.len() as f32;
+                let min = e_temps.iter().copied().fold(f32::INFINITY, f32::min);
+                let max = e_temps.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                format!("{:.0}°C ({:.0}–{:.0})", avg, min, max)
+            };
+            let p_avg_temp = if p_temps.is_empty() {
+                String::new()
+            } else {
+                let avg = p_temps.iter().sum::<f32>() / p_temps.len() as f32;
+                let min = p_temps.iter().copied().fold(f32::INFINITY, f32::min);
+                let max = p_temps.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                format!("{:.0}°C ({:.0}–{:.0})", avg, min, max)
+            };
 
             rows.push(TreeRow::pw_full(
                 "ecpu",
@@ -1004,7 +1041,10 @@ impl App {
             // Per E-core rows (collapsed by default)
             {
                 let ecpu_cont = format!("{}│  │  ", cp);
-                let all_ecores: Vec<_> = m.soc.ecpu_clusters.iter()
+                let all_ecores: Vec<_> = m
+                    .soc
+                    .ecpu_clusters
+                    .iter()
                     .flat_map(|cl| cl.cores.iter())
                     .collect();
 
@@ -1015,11 +1055,26 @@ impl App {
                         format!("{}├─ ", ecpu_cont)
                     };
                     let key = proc_key(&mut self.proc_keys, -(ci as i32 + 1000));
-                    let temp = e_temps.get(ci).map(|t| format!("{:.0}°C", t)).unwrap_or_default();
-                    let usage = e_usage.get(ci).map(|u| format!(" ({:>3.0}%) {}", u, usage_bar(*u))).unwrap_or_default();
-                    rows.push(TreeRow::pw_full(key, Some("ecpu"), &pfx,
+                    let temp = e_temps
+                        .get(ci)
+                        .map(|t| format!("{:.0}°C", t))
+                        .unwrap_or_default();
+                    let usage = e_usage
+                        .get(ci)
+                        .map(|u| format!(" ({:>3.0}%) {}", u, usage_bar(*u)))
+                        .unwrap_or_default();
+                    rows.push(TreeRow::pw_full(
+                        key,
+                        Some("ecpu"),
+                        &pfx,
                         &format!("{:<10}{}", core.name, usage),
-                        core.watts, 0.0, "", &temp, Style::default(), pin(key)));
+                        core.watts,
+                        0.0,
+                        "",
+                        &temp,
+                        Style::default(),
+                        pin(key),
+                    ));
                 }
             }
             rows.push(TreeRow::pw_full(
@@ -1044,11 +1099,26 @@ impl App {
                         format!("{}├─ ", pcpu_cont)
                     };
                     let key = proc_key(&mut self.proc_keys, -(ci as i32 + 2000));
-                    let temp = p_temps.get(ci).map(|t| format!("{:.0}°C", t)).unwrap_or_default();
-                    let usage = p_usage.get(ci).map(|u| format!(" ({:>3.0}%) {}", u, usage_bar(*u))).unwrap_or_default();
-                    rows.push(TreeRow::pw_full(key, Some("pcpu"), &pfx,
+                    let temp = p_temps
+                        .get(ci)
+                        .map(|t| format!("{:.0}°C", t))
+                        .unwrap_or_default();
+                    let usage = p_usage
+                        .get(ci)
+                        .map(|u| format!(" ({:>3.0}%) {}", u, usage_bar(*u)))
+                        .unwrap_or_default();
+                    rows.push(TreeRow::pw_full(
+                        key,
+                        Some("pcpu"),
+                        &pfx,
                         &format!("{:<10}{}", core.name, usage),
-                        core.watts, 0.0, "", &temp, Style::default(), pin(key)));
+                        core.watts,
+                        0.0,
+                        "",
+                        &temp,
+                        Style::default(),
+                        pin(key),
+                    ));
                 }
             }
             let gpu_util = m.soc.gpu_util_device;
@@ -1073,14 +1143,28 @@ impl App {
             {
                 let gpu_cont = format!("{}│  ", cp);
                 rows.push(TreeRow::info(
-                    Some("gpu"), &format!("{}├─ ", gpu_cont),
-                    &format!("Renderer ({:>3}%) {}", m.soc.gpu_util_renderer, usage_bar(m.soc.gpu_util_renderer as f32)),
-                    "", "", Style::default(),
+                    Some("gpu"),
+                    &format!("{}├─ ", gpu_cont),
+                    &format!(
+                        "Renderer ({:>3}%) {}",
+                        m.soc.gpu_util_renderer,
+                        usage_bar(m.soc.gpu_util_renderer as f32)
+                    ),
+                    "",
+                    "",
+                    Style::default(),
                 ));
                 rows.push(TreeRow::info(
-                    Some("gpu"), &format!("{}└─ ", gpu_cont),
-                    &format!("Tiler    ({:>3}%) {}", m.soc.gpu_util_tiler, usage_bar(m.soc.gpu_util_tiler as f32)),
-                    "", "", Style::default(),
+                    Some("gpu"),
+                    &format!("{}└─ ", gpu_cont),
+                    &format!(
+                        "Tiler    ({:>3}%) {}",
+                        m.soc.gpu_util_tiler,
+                        usage_bar(m.soc.gpu_util_tiler as f32)
+                    ),
+                    "",
+                    "",
+                    Style::default(),
                 ));
             }
             rows.push(TreeRow::pw_full(
@@ -1106,8 +1190,13 @@ impl App {
                     };
                     rows.push(TreeRow::pw(
                         proc_key(&mut self.proc_keys, -(ai as i32 + 3000)),
-                        Some("ane"), &pfx, name, *watts, 0.0,
-                        Style::default(), false,
+                        Some("ane"),
+                        &pfx,
+                        name,
+                        *watts,
+                        0.0,
+                        Style::default(),
+                        false,
                     ));
                 }
             }
@@ -1145,7 +1234,11 @@ impl App {
             "ssd",
             Some("system"),
             &t("ssd"),
-            &if m.ssd_model.is_empty() { "SSD".into() } else { format!("SSD ({})", m.ssd_model) },
+            &if m.ssd_model.is_empty() {
+                "SSD".into()
+            } else {
+                format!("SSD ({})", m.ssd_model)
+            },
             s.ssd.get(),
             w.ssd,
             "",
@@ -1157,16 +1250,22 @@ impl App {
         {
             let ssd_cont = c("ssd");
             let mut r = TreeRow::info(
-                Some("ssd"), &format!("{}├─ ", ssd_cont), "Read",
+                Some("ssd"),
+                &format!("{}├─ ", ssd_cont),
+                "Read",
                 &human_rate(m.disk.read_bytes_per_sec),
-                &human_bytes(self.wh.disk_read_bytes), DATA_STYLE,
+                &human_bytes(self.wh.disk_read_bytes),
+                DATA_STYLE,
             );
             r.key = Some("disk_read");
             rows.push(r);
             let mut r = TreeRow::info(
-                Some("ssd"), &format!("{}└─ ", ssd_cont), "Write",
+                Some("ssd"),
+                &format!("{}└─ ", ssd_cont),
+                "Write",
                 &human_rate(m.disk.write_bytes_per_sec),
-                &human_bytes(self.wh.disk_write_bytes), DATA_STYLE,
+                &human_bytes(self.wh.disk_write_bytes),
+                DATA_STYLE,
             );
             r.key = Some("disk_write");
             rows.push(r);
@@ -1276,7 +1375,10 @@ impl App {
                     fan_key(i),
                     Some("fans"),
                     &pfx,
-                    &format!("{} ({:.0}/{:.0} RPM)", fan.name, fan.actual_rpm, fan.max_rpm),
+                    &format!(
+                        "{} ({:.0}/{:.0} RPM)",
+                        fan.name, fan.actual_rpm, fan.max_rpm
+                    ),
                     fan.estimated_power_w,
                     fan_wh_val,
                     Style::default(),
@@ -1287,7 +1389,9 @@ impl App {
 
         // ── Peripherals
         let pc = c("peripherals");
-        let usb_total_w: f32 = m.usb_devices.iter()
+        let usb_total_w: f32 = m
+            .usb_devices
+            .iter()
             .map(|d| d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0)
             .sum();
         let usb_total_wh: f64 = self.usb_wh.iter().sum();
@@ -1304,8 +1408,15 @@ impl App {
 
         let (wifi_name, wifi_style) = match (m.wifi.connected, m.wifi.phy_mode.is_empty()) {
             (true, _) => {
-                let ch = if m.wifi.channel.is_empty() { String::new() } else { format!(", ch{}", m.wifi.channel) };
-                (format!("WiFi ({} dBm, {}{})", m.wifi.rssi_dbm, m.wifi.phy_mode, ch), Style::default())
+                let ch = if m.wifi.channel.is_empty() {
+                    String::new()
+                } else {
+                    format!(", ch{}", m.wifi.channel)
+                };
+                (
+                    format!("WiFi ({} dBm, {}{})", m.wifi.rssi_dbm, m.wifi.phy_mode, ch),
+                    Style::default(),
+                )
             }
             (false, true) => ("WiFi (scanning…)".into(), PENDING),
             (false, false) => ("WiFi (off)".into(), Style::default()),
@@ -1446,12 +1557,20 @@ impl App {
                 if d.bytes_read > 0 || d.bytes_written > 0 {
                     let (rate_r, rate_w) = self.usb_rates.get(i).copied().unwrap_or((0.0, 0.0));
                     rows.push(TreeRow::info(
-                        Some(key), &format!("{}├─ ", cont), "Read",
-                        &human_rate(rate_r), &human_bytes(d.bytes_read as f64), DATA_STYLE,
+                        Some(key),
+                        &format!("{}├─ ", cont),
+                        "Read",
+                        &human_rate(rate_r),
+                        &human_bytes(d.bytes_read as f64),
+                        DATA_STYLE,
                     ));
                     rows.push(TreeRow::info(
-                        Some(key), &format!("{}└─ ", cont), "Write",
-                        &human_rate(rate_w), &human_bytes(d.bytes_written as f64), DATA_STYLE,
+                        Some(key),
+                        &format!("{}└─ ", cont),
+                        "Write",
+                        &human_rate(rate_w),
+                        &human_bytes(d.bytes_written as f64),
+                        DATA_STYLE,
                     ));
                 }
             }
@@ -1501,25 +1620,40 @@ impl App {
 
         // ── Software (standalone collapsible section after the tree)
         rows.push(TreeRow::separator());
-        let all_sw_energy = (m.all_procs_energy_mj - self.proc_baseline.values().sum::<f64>()).max(0.0);
+        let all_sw_energy =
+            (m.all_procs_energy_mj - self.proc_baseline.values().sum::<f64>()).max(0.0);
         // Dynamic limit: count only visible rows (after collapse filtering)
         let visible_tree_rows = rows.iter().filter(|r| !self.is_hidden(r, &rows)).count();
-        let chart_slots = if self.pinned.is_empty() { 1 } else { self.pinned.len() + 1 };
+        let chart_slots = if self.pinned.is_empty() {
+            1
+        } else {
+            self.pinned.len() + 1
+        };
         let reserved = visible_tree_rows + 5 + chart_slots * CHART_HEIGHT as usize;
         let proc_limit = ((self.term_height as usize).saturating_sub(reserved)).max(10);
         {
             let mut sw_row = TreeRow::pw(
-                "software", None, "",
+                "software",
+                None,
+                "",
                 &format!("Software (filter: top {} by total)", proc_limit),
                 m.all_procs_power_w + 0.0,
                 all_sw_energy / 3600.0 / 1000.0,
-                BOLD, pin("software"),
+                BOLD,
+                pin("software"),
             );
             sw_row.label_style = BOLD;
             rows.push(sw_row);
         }
         if m.top_processes.is_empty() {
-            rows.push(TreeRow::info(Some("software"), "", "(collecting…)", "", "", PENDING));
+            rows.push(TreeRow::info(
+                Some("software"),
+                "",
+                "(collecting…)",
+                "",
+                "",
+                PENDING,
+            ));
         }
         let self_pid = std::process::id() as i32;
         let baseline = &self.proc_baseline;
@@ -1535,7 +1669,8 @@ impl App {
         display_procs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         display_procs.truncate(proc_limit);
         // Pre-compute per-process keys
-        let proc_row_keys: Vec<&'static str> = display_procs.iter()
+        let proc_row_keys: Vec<&'static str> = display_procs
+            .iter()
             .map(|(p, _)| proc_key(&mut self.proc_keys, p.pid))
             .collect();
         rows.extend(display_procs.iter().enumerate().map(|(i, (p, adj_mj))| {
@@ -1559,8 +1694,12 @@ impl App {
                 format!("{} ({})", p.name, p.pid)
             };
             let mut r = TreeRow::pw(
-                key, Some("software"), pfx, &label,
-                p.power_w, *adj_mj / 3600.0 / 1000.0,
+                key,
+                Some("software"),
+                pfx,
+                &label,
+                p.power_w,
+                *adj_mj / 3600.0 / 1000.0,
                 Style::default().fg(color),
                 self.pinned.contains(&key),
             );
@@ -1573,7 +1712,13 @@ impl App {
 
     // ── Two-pass buffer renderer ────────────────────────────────────────────
 
-    fn draw_tree_buf(&mut self, f: &mut Frame, area: Rect, rows: &[&TreeRow], all_rows: &[TreeRow]) {
+    fn draw_tree_buf(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        rows: &[&TreeRow],
+        all_rows: &[TreeRow],
+    ) {
         let block = Block::default().borders(Borders::ALL).title(format!(
             " Power Tree ({}/{}) ",
             self.cursor + 1,
@@ -1591,8 +1736,15 @@ impl App {
         let right = inner.right();
         // Inline sparkline column when wide enough (1-char gap after Total)
         let spark_gap: u16 = if inner.width > 90 { 1 } else { 0 };
-        let spark_w = if inner.width > 90 { (inner.width - 90 - 1).min(60) } else { 0 };
-        let tot_x = right.saturating_sub(COL_TOT).saturating_sub(spark_w).saturating_sub(spark_gap);
+        let spark_w = if inner.width > 90 {
+            (inner.width - 90 - 1).min(60)
+        } else {
+            0
+        };
+        let tot_x = right
+            .saturating_sub(COL_TOT)
+            .saturating_sub(spark_w)
+            .saturating_sub(spark_gap);
         let cur_x = tot_x.saturating_sub(COL_CUR);
         let tmp_x = cur_x.saturating_sub(COL_TEMP);
         let frq_x = tmp_x.saturating_sub(COL_FREQ);
@@ -1665,11 +1817,11 @@ impl App {
             // Overlay data columns (Freq/Temp overwrite label text where needed)
             if !row.freq.is_empty() {
                 // Clear column and write with left padding
-                buf.set_string(frq_x, y, &" ".repeat(COL_FREQ as usize), Style::default());
+                buf.set_string(frq_x, y, " ".repeat(COL_FREQ as usize), Style::default());
                 right_str(buf, frq_x, y, COL_FREQ, &row.freq, DIM);
             }
             if !row.temp.is_empty() {
-                buf.set_string(tmp_x, y, &" ".repeat(COL_TEMP as usize), Style::default());
+                buf.set_string(tmp_x, y, " ".repeat(COL_TEMP as usize), Style::default());
                 right_str(buf, tmp_x, y, COL_TEMP, &row.temp, DIM);
             }
             if !row.current.is_empty() {
@@ -1687,13 +1839,18 @@ impl App {
                         let skip = hist.len().saturating_sub(w);
                         let visible: Vec<f64> = hist.iter().skip(skip).copied().collect();
                         let vis_max = visible.iter().copied().fold(0.0f64, f64::max).max(0.001);
-                        let is_data_key = matches!(key, "net_down" | "net_up" | "disk_read" | "disk_write");
+                        let is_data_key =
+                            matches!(key, "net_down" | "net_up" | "disk_read" | "disk_write");
                         for (ci, &val) in visible.iter().enumerate() {
                             let x = spark_x + (w - visible.len() + ci) as u16;
                             let level = (val / vis_max * 7.0).round() as usize;
                             let ch = SPARK_CHARS[level.min(7)];
-                            let color = if is_data_key { Color::Rgb(80, 140, 255) } else { power_color(val as f32) };
-                            buf.set_string(x, y, &ch.to_string(), Style::default().fg(color));
+                            let color = if is_data_key {
+                                Color::Rgb(80, 140, 255)
+                            } else {
+                                power_color(val as f32)
+                            };
+                            buf.set_string(x, y, ch.to_string(), Style::default().fg(color));
                         }
                     }
                 }
@@ -1790,7 +1947,11 @@ impl App {
             let is_data = matches!(key, "net_down" | "net_up" | "disk_read" | "disk_write");
             let scale_h = inner[0].height;
             let fmt_axis = |v: f64| -> String {
-                if is_data { human_rate(v) } else { format!("{:>5.1}", v) }
+                if is_data {
+                    human_rate(v)
+                } else {
+                    format!("{:>5.1}", v)
+                }
             };
             let scale_lines: Vec<Line> = (0..scale_h)
                 .map(|row| {
@@ -1834,7 +1995,7 @@ impl App {
                         Color::Rgb(80, 140, 255)
                     } else {
                         power_color(current as f32)
-                    }
+                    },
                 ));
             f.render_widget(spark, inner[1]);
         }
@@ -1939,20 +2100,24 @@ fn usage_bar(pct: f32) -> String {
 }
 
 fn fan_key(index: usize) -> &'static str {
-    const KEYS: [&str; 8] = ["fan0", "fan1", "fan2", "fan3", "fan4", "fan5", "fan6", "fan7"];
+    const KEYS: [&str; 8] = [
+        "fan0", "fan1", "fan2", "fan3", "fan4", "fan5", "fan6", "fan7",
+    ];
     KEYS.get(index).copied().unwrap_or("fan0")
 }
 
 fn usb_key(index: usize) -> &'static str {
     const KEYS: [&str; 16] = [
-        "usb0", "usb1", "usb2", "usb3", "usb4", "usb5", "usb6", "usb7",
-        "usb8", "usb9", "usb10", "usb11", "usb12", "usb13", "usb14", "usb15",
+        "usb0", "usb1", "usb2", "usb3", "usb4", "usb5", "usb6", "usb7", "usb8", "usb9", "usb10",
+        "usb11", "usb12", "usb13", "usb14", "usb15",
     ];
     KEYS.get(index).copied().unwrap_or("usb0")
 }
 
 fn proc_key(cache: &mut std::collections::HashMap<i32, &'static str>, pid: i32) -> &'static str {
-    *cache.entry(pid).or_insert_with(|| Box::leak(format!("pid.{}", pid).into_boxed_str()))
+    cache
+        .entry(pid)
+        .or_insert_with(|| Box::leak(format!("pid.{}", pid).into_boxed_str()))
 }
 
 fn read_machine_name() -> String {
@@ -1960,13 +2125,13 @@ fn read_machine_name() -> String {
         .args(["-n", "machdep.cpu.brand_string"])
         .output()
         .ok()
-        .and_then(|o| Some(String::from_utf8_lossy(&o.stdout).trim().to_string()))
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty());
     let model = std::process::Command::new("sysctl")
         .args(["-n", "hw.model"])
         .output()
         .ok()
-        .and_then(|o| Some(String::from_utf8_lossy(&o.stdout).trim().to_string()))
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty());
     match (chip, model) {
         (Some(c), Some(m)) => format!("{} ({})", c, m),

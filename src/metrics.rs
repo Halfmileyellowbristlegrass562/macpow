@@ -38,8 +38,9 @@ extern "C" {
 }
 
 /// Cached DisplayServices function pointer (loaded once via dlopen).
-static DISPLAY_BRIGHTNESS_FN: std::sync::OnceLock<Option<unsafe extern "C" fn(u32, *mut f32) -> i32>> =
-    std::sync::OnceLock::new();
+static DISPLAY_BRIGHTNESS_FN: std::sync::OnceLock<
+    Option<unsafe extern "C" fn(u32, *mut f32) -> i32>,
+> = std::sync::OnceLock::new();
 
 fn load_display_brightness_fn() -> Option<unsafe extern "C" fn(u32, *mut f32) -> i32> {
     use std::ffi::CStr;
@@ -57,7 +58,10 @@ fn load_display_brightness_fn() -> Option<unsafe extern "C" fn(u32, *mut f32) ->
             return None;
         }
         // Don't dlclose — keep the library loaded for the process lifetime
-        Some(std::mem::transmute(sym))
+        Some(std::mem::transmute::<
+            *mut libc::c_void,
+            unsafe extern "C" fn(u32, *mut f32) -> i32,
+        >(sym))
     }
 }
 
@@ -330,9 +334,9 @@ fn read_audio_volume() -> (Option<f32>, bool) {
 }
 
 fn detect_audio_from_assertions(assertions: &[crate::types::PowerAssertion]) -> (bool, bool) {
-    let device_active = assertions.iter().any(|a| {
-        a.name.contains("BuiltInSpeakerDevice") || a.name.contains("audio-out")
-    });
+    let device_active = assertions
+        .iter()
+        .any(|a| a.name.contains("BuiltInSpeakerDevice") || a.name.contains("audio-out"));
     let playing = assertions.iter().any(|a| a.name.contains("AudioTap"));
     (device_active, playing)
 }
@@ -455,18 +459,31 @@ fn read_dram_gb() -> u32 {
 fn read_ssd_model() -> String {
     unsafe {
         let matching = IOServiceMatching(b"IONVMeController\0".as_ptr() as *const i8);
-        if matching.is_null() { return String::new(); }
+        if matching.is_null() {
+            return String::new();
+        }
         let mut iter: u32 = 0;
-        if IOServiceGetMatchingServices(0, matching, &mut iter) != 0 { return String::new(); }
+        if IOServiceGetMatchingServices(0, matching, &mut iter) != 0 {
+            return String::new();
+        }
         let entry = IOIteratorNext(iter);
-        if entry == 0 { IOObjectRelease(iter); return String::new(); }
+        if entry == 0 {
+            IOObjectRelease(iter);
+            return String::new();
+        }
         let mut props = std::ptr::null_mut();
         let mut model = String::new();
         let mut interconnect = String::new();
-        if IORegistryEntryCreateCFProperties(entry, &mut props, std::ptr::null(), 0) == 0 && !props.is_null() {
+        if IORegistryEntryCreateCFProperties(entry, &mut props, std::ptr::null(), 0) == 0
+            && !props.is_null()
+        {
             let dict = props as core_foundation_sys::dictionary::CFDictionaryRef;
-            model = cf_utils::cfdict_get_string(dict, "Model Number").unwrap_or_default().trim().to_string();
-            interconnect = cf_utils::cfdict_get_string(dict, "Physical Interconnect").unwrap_or_default();
+            model = cf_utils::cfdict_get_string(dict, "Model Number")
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            interconnect =
+                cf_utils::cfdict_get_string(dict, "Physical Interconnect").unwrap_or_default();
             cf_utils::cf_release(props as _);
         }
         IOObjectRelease(entry);
@@ -543,9 +560,16 @@ fn read_gpu_utilization() -> (u32, u32, u32) {
                 let name = format!("AGXAcceleratorG{}{}", gen, suffix);
                 let matched = unsafe {
                     let m = IOServiceMatching(name.as_ptr() as *const i8);
-                    if m.is_null() { false } else {
+                    if m.is_null() {
+                        false
+                    } else {
                         let s = IOServiceGetMatchingService(0, m);
-                        if s != 0 { IOObjectRelease(s); true } else { false }
+                        if s != 0 {
+                            IOObjectRelease(s);
+                            true
+                        } else {
+                            false
+                        }
                     }
                 };
                 if matched {
@@ -564,9 +588,13 @@ fn read_gpu_utilization() -> (u32, u32, u32) {
 
 unsafe fn try_gpu_util_class(class_name: &[u8]) -> (u32, u32, u32) {
     let matching = IOServiceMatching(class_name.as_ptr() as *const i8);
-    if matching.is_null() { return (0, 0, 0); }
+    if matching.is_null() {
+        return (0, 0, 0);
+    }
     let service = IOServiceGetMatchingService(0, matching);
-    if service == 0 { return (0, 0, 0); }
+    if service == 0 {
+        return (0, 0, 0);
+    }
     let mut props = std::ptr::null_mut();
     let result = if IORegistryEntryCreateCFProperties(service, &mut props, std::ptr::null(), 0) == 0
         && !props.is_null()
@@ -579,9 +607,15 @@ unsafe fn try_gpu_util_class(class_name: &[u8]) -> (u32, u32, u32) {
             let ren = cf_utils::cfdict_get_i64(sd, "Renderer Utilization %").unwrap_or(0) as u32;
             let til = cf_utils::cfdict_get_i64(sd, "Tiler Utilization %").unwrap_or(0) as u32;
             (dev, ren, til)
-        } else { (0, 0, 0) }
-    } else { (0, 0, 0) };
-    if !props.is_null() { cf_utils::cf_release(props as _); }
+        } else {
+            (0, 0, 0)
+        }
+    } else {
+        (0, 0, 0)
+    };
+    if !props.is_null() {
+        cf_utils::cf_release(props as _);
+    }
     IOObjectRelease(service);
     result
 }
@@ -612,30 +646,50 @@ fn read_cpu_ticks() -> Vec<(u64, u64)> {
         let mut ncpu: u32 = 0;
         let mut info: *mut i32 = std::ptr::null_mut();
         let mut count: u32 = 0;
-        if host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &mut ncpu, &mut info, &mut count) != 0 {
+        if host_processor_info(
+            mach_host_self(),
+            PROCESSOR_CPU_LOAD_INFO,
+            &mut ncpu,
+            &mut info,
+            &mut count,
+        ) != 0
+        {
             return Vec::new();
         }
-        let result: Vec<(u64, u64)> = (0..ncpu as usize).map(|i| {
-            let base = i * CPU_LOAD_FIELDS;
-            let user = *info.add(base + CPU_STATE_USER) as u64;
-            let sys = *info.add(base + CPU_STATE_SYSTEM) as u64;
-            let idle = *info.add(base + CPU_STATE_IDLE) as u64;
-            let nice = *info.add(base + 3) as u64;
-            let total = user + sys + idle + nice;
-            let used = user + sys;
-            (used, total)
-        }).collect();
-        vm_deallocate(crate::iokit_ffi::mach_task_self(), info as usize, count as usize * 4);
+        let result: Vec<(u64, u64)> = (0..ncpu as usize)
+            .map(|i| {
+                let base = i * CPU_LOAD_FIELDS;
+                let user = *info.add(base + CPU_STATE_USER) as u64;
+                let sys = *info.add(base + CPU_STATE_SYSTEM) as u64;
+                let idle = *info.add(base + CPU_STATE_IDLE) as u64;
+                let nice = *info.add(base + 3) as u64;
+                let total = user + sys + idle + nice;
+                let used = user + sys;
+                (used, total)
+            })
+            .collect();
+        vm_deallocate(
+            crate::iokit_ffi::mach_task_self(),
+            info as usize,
+            count as usize * 4,
+        );
         result
     }
 }
 
 fn compute_cpu_usage(prev: &[(u64, u64)], cur: &[(u64, u64)]) -> Vec<f32> {
-    cur.iter().zip(prev.iter()).map(|((cu, ct), (pu, pt))| {
-        let dt = ct.saturating_sub(*pt);
-        let du = cu.saturating_sub(*pu);
-        if dt > 0 { (du as f32 / dt as f32 * 100.0).clamp(0.0, 100.0) } else { 0.0 }
-    }).collect()
+    cur.iter()
+        .zip(prev.iter())
+        .map(|((cu, ct), (pu, pt))| {
+            let dt = ct.saturating_sub(*pt);
+            let du = cu.saturating_sub(*pu);
+            if dt > 0 {
+                (du as f32 / dt as f32 * 100.0).clamp(0.0, 100.0)
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
 use std::sync::{Arc, Mutex};
@@ -652,10 +706,10 @@ impl Sampler {
     pub fn new(interval_ms: u64) -> Self {
         // Parallelize init reads — all independent
         let (gpu_cores, dram_gb, ssd_model, max_nits) = std::thread::scope(|s| {
-            let h1 = s.spawn(|| read_gpu_core_count());
-            let h2 = s.spawn(|| read_dram_gb());
-            let h3 = s.spawn(|| read_ssd_model());
-            let h4 = s.spawn(|| read_display_max_nits());
+            let h1 = s.spawn(read_gpu_core_count);
+            let h2 = s.spawn(read_dram_gb);
+            let h3 = s.spawn(read_ssd_model);
+            let h4 = s.spawn(read_display_max_nits);
             (
                 h1.join().unwrap_or(0),
                 h2.join().unwrap_or(0),
@@ -800,7 +854,9 @@ impl Sampler {
         {
             let m = shared.clone();
             handles.push(std::thread::spawn(move || loop {
-                let assertions = m.lock().ok()
+                let assertions = m
+                    .lock()
+                    .ok()
                     .map(|mg| mg.power_assertions.clone())
                     .unwrap_or_default();
                 let audio = read_audio_info(&assertions);
