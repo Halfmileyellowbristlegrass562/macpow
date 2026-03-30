@@ -394,8 +394,23 @@ impl App {
             history: BTreeMap::new(),
             pinned: Vec::new(),
             collapsed: [
-                "wifi", "bluetooth", "ssd", "ecpu", "pcpu", "gpu", "ane", "display", "fabric",
-                "usb0", "usb1", "usb2", "usb3", "usb4", "usb5", "usb6", "usb7",
+                "wifi",
+                "bluetooth",
+                "ssd",
+                "ecpu",
+                "pcpu",
+                "gpu",
+                "ane",
+                "display",
+                "fabric",
+                "usb0",
+                "usb1",
+                "usb2",
+                "usb3",
+                "usb4",
+                "usb5",
+                "usb6",
+                "usb7",
             ]
             .into_iter()
             .collect(),
@@ -659,7 +674,18 @@ impl App {
                     if target < self.total_rows
                         && !self.row_is_sep.get(target).copied().unwrap_or(false)
                     {
-                        self.cursor = target;
+                        if target == self.cursor {
+                            // Click on selected row: toggle collapse
+                            if let Some(Some(key)) = self.row_keys_cache.get(self.cursor) {
+                                if self.collapsed.contains(key) {
+                                    self.collapsed.remove(key);
+                                } else if self.row_parents_cache.contains(&Some(*key)) {
+                                    self.collapsed.insert(*key);
+                                }
+                            }
+                        } else {
+                            self.cursor = target;
+                        }
                     }
                 }
             }
