@@ -78,6 +78,20 @@ fn ioreport_cpu_clusters_populated() {
         "P-core cores should be detected"
     );
 
+    let detected_cores: usize = soc
+        .ecpu_clusters
+        .iter()
+        .map(|cluster| cluster.cores.len())
+        .sum::<usize>()
+        + soc.pcpu_cluster.cores.len();
+    let host_cores = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(detected_cores);
+    assert_eq!(
+        detected_cores, host_cores,
+        "detected CPU core count should match host parallelism"
+    );
+
     soc.ecpu_clusters.iter().for_each(|cluster| {
         assert!(
             !cluster.cores.is_empty(),
