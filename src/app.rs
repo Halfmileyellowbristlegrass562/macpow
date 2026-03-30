@@ -16,8 +16,9 @@ const BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
 const DIM: Style = Style::new().fg(Color::DarkGray);
 const DATA_STYLE: Style = Style::new().fg(Color::Rgb(80, 140, 255));
 const PENDING: Style = Style::new().fg(Color::Magenta);
-const CURSOR_BG: Style = Style::new().bg(Color::Rgb(40, 40, 50));
-const TREE_STYLE: Style = Style::new().fg(Color::White);
+#[allow(dead_code)]
+const CURSOR_BG: Style = Style::new().bg(Color::Rgb(50, 50, 60));
+const TREE_STYLE: Style = Style::new().fg(Color::Reset);
 const PIN_MARKER: &str = "▸ ";
 const HISTORY_LEN: usize = 240;
 const CHART_HEIGHT: u16 = 7;
@@ -339,7 +340,7 @@ impl App {
         let machine_name = read_machine_name();
         Self {
             metrics: Metrics::default(),
-            cursor: 0,
+            cursor: 2, // start at tree root (after battery + separator)
             last_tick: None,
             wh: Wh::default(),
             sma: MetricsSma::new(0.0),
@@ -711,11 +712,20 @@ impl App {
             .collect();
 
         self.total_rows = rows.len();
-        self.cursor = self.cursor.min(self.total_rows.saturating_sub(1));
 
+        // Preserve cursor position by tracking the selected resource key
+        let prev_key = self.row_keys_cache.get(self.cursor).copied().flatten();
         self.row_keys_cache = rows.iter().map(|r| r.key).collect();
         self.row_parents_cache = rows.iter().map(|r| r.parent).collect();
         self.row_is_sep = rows.iter().map(|r| r.label == "\x00sep").collect();
+
+        // Restore cursor to the same key if rows shifted
+        if let Some(pk) = prev_key {
+            if let Some(pos) = self.row_keys_cache.iter().position(|k| *k == Some(pk)) {
+                self.cursor = pos;
+            }
+        }
+        self.cursor = self.cursor.min(self.total_rows.saturating_sub(1));
 
         // Cache labels for chart titles
         for r in &rows {
@@ -1472,7 +1482,7 @@ impl App {
                 let color = match avg {
                     a if a > 90.0 => Color::Red,
                     a if a > 70.0 => Color::Yellow,
-                    _ => Color::White,
+                    _ => Color::Reset,
                 };
                 let mut r = TreeRow::info(
                     Some("temps"),
@@ -1493,7 +1503,7 @@ impl App {
         // Dynamic limit: count only visible rows (after collapse filtering)
         let visible_tree_rows = rows.iter().filter(|r| !self.is_hidden(r, &rows)).count();
         let chart_slots = if self.pinned.is_empty() { 1 } else { self.pinned.len() + 1 };
-        let reserved = visible_tree_rows + 6 + chart_slots * CHART_HEIGHT as usize;
+        let reserved = visible_tree_rows + 5 + chart_slots * CHART_HEIGHT as usize;
         let proc_limit = ((self.term_height as usize).saturating_sub(reserved)).max(10);
         {
             let mut sw_row = TreeRow::pw(
@@ -1687,10 +1697,13 @@ impl App {
                 }
             }
 
-            // Cursor highlight (background only, preserves text colors)
+            // Cursor highlight (background only, preserves text and fg colors)
             if abs_idx == self.cursor {
-                let row_rect = Rect::new(inner.x, y, inner.width, 1);
-                buf.set_style(row_rect, CURSOR_BG);
+                for cx in inner.x..inner.right() {
+                    if let Some(cell) = buf.cell_mut(ratatui::layout::Position::new(cx, y)) {
+                        cell.set_bg(Color::Rgb(50, 50, 60));
+                    }
+                }
             }
         }
     }
@@ -1740,7 +1753,7 @@ impl App {
             let title_style = if is_pinned {
                 Style::default().fg(Color::Cyan)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(Color::Reset)
             };
             let pin_icon = if is_pinned { " [pinned]" } else { "" };
 
