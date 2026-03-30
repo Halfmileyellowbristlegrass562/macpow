@@ -15,15 +15,16 @@ Real-time power consumption monitor for Apple Silicon Macs (M1–M5+).
 
 ## Features
 
-- **SoC breakdown** — CPU (E/P cores with per-core power, utilization bars, temperatures), GPU, ANE, DRAM, GPU SRAM with real-time wattage from IOReport Energy Model
+- **SoC breakdown** — CPU (E/P cores with per-core power, utilization bars, temperatures), GPU, ANE, DRAM, GPU SRAM, Media Engine, Camera (ISP), Fabric — all from IOReport Energy Model
 - **CPU utilization** — per-core usage % with visual bars from Mach `host_processor_info`
 - **Real frequencies** — CPU and GPU MHz from DVFS voltage-states tables, not percentages
 - **Temperatures** — per-component and per-core from SMC sensors (CPU, GPU, ANE, DRAM, SSD, Battery); adaptive key mapping for M1–M3 (`Tp0*`) and M4+ (`Tex*`/`Tp1*`/`Tp2*`)
 - **Memory** — used/total GB via `host_statistics64` Mach API
-- **Display & keyboard** — live brightness (nits) and estimated power via DisplayServices and IORegistry PWM
+- **Display** — brightness estimate + IOReport SoC display controller; external display power via IOReport DISPEXT
+- **Keyboard** — backlight brightness and estimated power via IORegistry PWM
 - **Battery** — voltage, amperage, charge %, time remaining, temperature, drain/charge rate
 - **SSD** — model, interconnect (Apple Fabric/PCIe), power estimation from IORegistry disk counters
-- **Peripherals** — WiFi (signal/mode/channel), Bluetooth devices with battery levels, USB devices (speed/power/I/O counters)
+- **Peripherals** — Thunderbolt/PCIe (IOReport measured), WiFi (signal/mode/channel), Bluetooth devices with battery levels, USB devices (speed/power/I/O counters)
 - **Per-process energy** — dynamically-sized top processes by session energy (from `proc_pid_rusage`), dead process detection
 - **Fans** — RPM and cubic power model per fan
 - **Collapsible tree** — fold/unfold with arrows, `+`/`-` for all
@@ -113,12 +114,15 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | Component | Source | Method |
 |-----------|--------|--------|
 | CPU, GPU, ANE, DRAM | IOReport | Direct energy measurement (mJ/uJ/nJ deltas) |
+| Media Engine, Camera (ISP) | IOReport | Direct energy measurement (AVE + MSR, ISP) |
+| Fabric (AMCC, DCS, FAB, AFR) | IOReport | Direct energy measurement |
+| Thunderbolt/PCIe | IOReport | Direct energy measurement (PCIe ports + controllers) |
+| Display | DisplayServices + IOReport | Brightness * 5W + SoC controller (DISP) + external (DISPEXT) |
 | System total | SMC PSTR | Direct power rail measurement |
 | Battery | IORegistry | V * I calculation |
 | Per-process | Kernel | `ri_billed_energy` from rusage_info_v4 |
 | CPU utilization | Mach API | `host_processor_info` tick deltas |
 | Memory | Mach API | `host_statistics64` (active + inactive + wired + compressor pages) |
-| Display | DisplayServices | Brightness * 5W max (linear model) |
 | Keyboard | IORegistry PWM | Duty cycle * 0.5W max |
 | Fans | SMC RPM | Cubic model: (RPM/RPM_max)^3 * 1W |
 | Audio | CoreAudio + IOPMAssertions | Idle 0.05W + volume^2 * 1W |
