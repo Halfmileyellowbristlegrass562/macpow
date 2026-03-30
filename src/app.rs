@@ -1035,7 +1035,6 @@ impl App {
                 + w.isp
                 + w.display_soc
                 + w.display_ext
-                + w.pcie
                 + w.media
                 + w.fabric;
             let cp = c("soc");
@@ -1356,16 +1355,6 @@ impl App {
                 pin("isp"),
             ));
             rows.push(TreeRow::pw(
-                "pcie",
-                Some("soc"),
-                &format!("{}├─ ", cp),
-                "PCIe/Thunderbolt",
-                s.pcie.get(),
-                w.pcie,
-                Style::default(),
-                pin("pcie"),
-            ));
-            rows.push(TreeRow::pw(
                 "fabric",
                 Some("soc"),
                 &format!("{}└─ ", cp),
@@ -1548,10 +1537,21 @@ impl App {
             Some("system"),
             &t("peripherals"),
             "Peripherals",
-            s.wifi.get() + s.bluetooth.get() + usb_total_w,
-            w.wifi + w.bluetooth + usb_total_wh,
+            s.wifi.get() + s.bluetooth.get() + s.pcie.get() + usb_total_w,
+            w.wifi + w.bluetooth + w.pcie + usb_total_wh,
             BOLD,
             pin("peripherals"),
+        ));
+
+        rows.push(TreeRow::pw(
+            "pcie",
+            Some("peripherals"),
+            &format!("{}├─ ", pc),
+            "Thunderbolt/PCIe",
+            s.pcie.get(),
+            w.pcie,
+            Style::default(),
+            pin("pcie"),
         ));
 
         let (wifi_name, wifi_style) = match (m.wifi.connected, m.wifi.phy_mode.is_empty()) {
