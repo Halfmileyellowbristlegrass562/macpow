@@ -677,6 +677,24 @@ impl IOReportSampler {
                     n if n.starts_with("GPU SRAM") => {
                         soc.gpu_sram_w += watts;
                     }
+                    "ISP" => {
+                        soc.isp_w += watts;
+                    }
+                    "DISP" => {
+                        soc.display_soc_w += watts;
+                    }
+                    "DISPEXT" => {
+                        soc.display_ext_w += watts;
+                    }
+                    "AVE" | "MSR" => {
+                        soc.media_w += watts;
+                    }
+                    n if n.starts_with("PCIe Port") || n.starts_with("apciec") => {
+                        soc.pcie_w += watts;
+                    }
+                    "AMCC" | "DCS" | "FAB" | "AFR" => {
+                        soc.fabric_w += watts;
+                    }
                     _ => {
                         if let Some(key) = parse_energy_core_key(&name) {
                             match key.kind {

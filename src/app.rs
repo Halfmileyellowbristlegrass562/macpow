@@ -241,6 +241,12 @@ struct Wh {
     ane: f64,
     dram: f64,
     gpu_sram: f64,
+    isp: f64,
+    display_soc: f64,
+    display_ext: f64,
+    pcie: f64,
+    media: f64,
+    fabric: f64,
     ssd: f64,
     display: f64,
     keyboard: f64,
@@ -270,8 +276,34 @@ macro_rules! sma_fields {
 }
 
 sma_fields!(
-    soc_total, cpu, ecpu, pcpu, gpu, ane, dram, gpu_sram, ssd, display, keyboard, audio, fan_total,
-    wifi, bluetooth, sys, battery, net_down, net_up, ecpu_freq, pcpu_freq, gpu_freq
+    soc_total,
+    cpu,
+    ecpu,
+    pcpu,
+    gpu,
+    ane,
+    dram,
+    gpu_sram,
+    isp,
+    display_soc,
+    display_ext,
+    pcie,
+    media,
+    fabric,
+    ssd,
+    display,
+    keyboard,
+    audio,
+    fan_total,
+    wifi,
+    bluetooth,
+    sys,
+    battery,
+    net_down,
+    net_up,
+    ecpu_freq,
+    pcpu_freq,
+    gpu_freq
 );
 
 impl MetricsSma {
@@ -284,6 +316,13 @@ impl MetricsSma {
         self.ane.push(m.soc.ane_w);
         self.dram.push(m.soc.dram_w);
         self.gpu_sram.push(m.soc.gpu_sram_w);
+        self.isp.push(m.soc.isp_w);
+        self.display_soc
+            .push(m.soc.display_soc_w + m.soc.display_ext_w);
+        self.display_ext.push(m.soc.display_ext_w);
+        self.pcie.push(m.soc.pcie_w);
+        self.media.push(m.soc.media_w);
+        self.fabric.push(m.soc.fabric_w);
         self.ssd.push(m.ssd_power_w);
         self.display.push(m.display.estimated_power_w);
         self.keyboard.push(m.keyboard.estimated_power_w);
@@ -355,8 +394,22 @@ impl App {
             history: BTreeMap::new(),
             pinned: Vec::new(),
             collapsed: [
-                "wifi", "ssd", "ecpu", "pcpu", "gpu", "ane", "usb0", "usb1", "usb2", "usb3",
-                "usb4", "usb5", "usb6", "usb7",
+                "wifi",
+                "ssd",
+                "ecpu",
+                "pcpu",
+                "gpu",
+                "ane",
+                "display_soc",
+                "fabric",
+                "usb0",
+                "usb1",
+                "usb2",
+                "usb3",
+                "usb4",
+                "usb5",
+                "usb6",
+                "usb7",
             ]
             .into_iter()
             .collect(),
@@ -403,6 +456,12 @@ impl App {
             self.wh.ane += m.soc.ane_w as f64 * dt_h;
             self.wh.dram += m.soc.dram_w as f64 * dt_h;
             self.wh.gpu_sram += m.soc.gpu_sram_w as f64 * dt_h;
+            self.wh.isp += m.soc.isp_w as f64 * dt_h;
+            self.wh.display_soc += m.soc.display_soc_w as f64 * dt_h;
+            self.wh.display_ext += m.soc.display_ext_w as f64 * dt_h;
+            self.wh.pcie += m.soc.pcie_w as f64 * dt_h;
+            self.wh.media += m.soc.media_w as f64 * dt_h;
+            self.wh.fabric += m.soc.fabric_w as f64 * dt_h;
             self.wh.ssd += m.ssd_power_w as f64 * dt_h;
             self.wh.display += m.display.estimated_power_w as f64 * dt_h;
             self.wh.keyboard += m.keyboard.estimated_power_w as f64 * dt_h;
@@ -467,6 +526,15 @@ impl App {
         self.push_history("ane", m.soc.ane_w as f64);
         self.push_history("dram", m.soc.dram_w as f64);
         self.push_history("gpu_sram", m.soc.gpu_sram_w as f64);
+        self.push_history("isp", m.soc.isp_w as f64);
+        self.push_history(
+            "display_soc",
+            (m.soc.display_soc_w + m.soc.display_ext_w) as f64,
+        );
+        self.push_history("display_ext", m.soc.display_ext_w as f64);
+        self.push_history("pcie", m.soc.pcie_w as f64);
+        self.push_history("media", m.soc.media_w as f64);
+        self.push_history("fabric", m.soc.fabric_w as f64);
         self.push_history("ssd", m.ssd_power_w as f64);
         self.push_history("display", m.display.estimated_power_w as f64);
         self.push_history("keyboard", m.keyboard.estimated_power_w as f64);
@@ -921,6 +989,12 @@ impl App {
             + w.ane
             + w.dram
             + w.gpu_sram
+            + w.isp
+            + w.display_soc
+            + w.display_ext
+            + w.pcie
+            + w.media
+            + w.fabric
             + w.ssd
             + w.display
             + w.keyboard
@@ -953,7 +1027,17 @@ impl App {
                 pin("soc"),
             ));
         } else {
-            let soc_wh = w.cpu + w.gpu + w.ane + w.dram + w.gpu_sram;
+            let soc_wh = w.cpu
+                + w.gpu
+                + w.ane
+                + w.dram
+                + w.gpu_sram
+                + w.isp
+                + w.display_soc
+                + w.display_ext
+                + w.pcie
+                + w.media
+                + w.fabric;
             let cp = c("soc");
 
             rows.push(TreeRow::pw(
@@ -1216,12 +1300,80 @@ impl App {
             rows.push(TreeRow::pw(
                 "gpu_sram",
                 Some("soc"),
-                &format!("{}└─ ", cp),
+                &format!("{}├─ ", cp),
                 "GPU SRAM (SLC)",
                 s.gpu_sram.get(),
                 w.gpu_sram,
                 Style::default(),
                 pin("gpu_sram"),
+            ));
+            // Display (IOReport measured)
+            {
+                let disp_total = s.display_soc.get() + s.display_ext.get();
+                let disp_wh = w.display_soc + w.display_ext;
+                rows.push(TreeRow::pw(
+                    "display_soc",
+                    Some("soc"),
+                    &format!("{}├─ ", cp),
+                    "Display (SoC)",
+                    disp_total,
+                    disp_wh,
+                    Style::default(),
+                    pin("display_soc"),
+                ));
+                if m.soc.display_ext_w > 0.0 || w.display_ext > 0.0 {
+                    let dc = format!("{}│  ", cp);
+                    rows.push(TreeRow::pw(
+                        "display_ext",
+                        Some("display_soc"),
+                        &format!("{}└─ ", dc),
+                        "External Display",
+                        s.display_ext.get(),
+                        w.display_ext,
+                        Style::default(),
+                        pin("display_ext"),
+                    ));
+                }
+            }
+            rows.push(TreeRow::pw(
+                "media",
+                Some("soc"),
+                &format!("{}├─ ", cp),
+                "Media Engine",
+                s.media.get(),
+                w.media,
+                Style::default(),
+                pin("media"),
+            ));
+            rows.push(TreeRow::pw(
+                "isp",
+                Some("soc"),
+                &format!("{}├─ ", cp),
+                "Camera (ISP)",
+                s.isp.get(),
+                w.isp,
+                Style::default(),
+                pin("isp"),
+            ));
+            rows.push(TreeRow::pw(
+                "pcie",
+                Some("soc"),
+                &format!("{}├─ ", cp),
+                "PCIe/Thunderbolt",
+                s.pcie.get(),
+                w.pcie,
+                Style::default(),
+                pin("pcie"),
+            ));
+            rows.push(TreeRow::pw(
+                "fabric",
+                Some("soc"),
+                &format!("{}└─ ", cp),
+                "Fabric",
+                s.fabric.get(),
+                w.fabric,
+                Style::default(),
+                pin("fabric"),
             ));
         }
 

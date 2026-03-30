@@ -52,7 +52,17 @@ fn ioreport_sample_and_delta() {
     assert!(soc.dram_w >= 0.0 && soc.dram_w < MAX_DRAM_W);
     assert!(soc.total_w >= 0.0 && soc.total_w < MAX_SOC_W);
 
-    let sum = soc.cpu_w + soc.gpu_w + soc.ane_w + soc.dram_w + soc.gpu_sram_w;
+    let sum = soc.cpu_w
+        + soc.gpu_w
+        + soc.ane_w
+        + soc.dram_w
+        + soc.gpu_sram_w
+        + soc.isp_w
+        + soc.display_soc_w
+        + soc.display_ext_w
+        + soc.pcie_w
+        + soc.media_w
+        + soc.fabric_w;
     let diff = (soc.total_w - sum).abs();
     assert!(
         diff < 0.001,

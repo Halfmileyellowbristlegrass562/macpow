@@ -71,6 +71,12 @@ pub struct SocPower {
     pub ane_parts: Vec<(String, f32)>,
     pub dram_w: f32,
     pub gpu_sram_w: f32,
+    pub isp_w: f32,
+    pub display_soc_w: f32,
+    pub display_ext_w: f32,
+    pub pcie_w: f32,
+    pub media_w: f32,
+    pub fabric_w: f32,
     pub total_w: f32,
     pub ecpu_freq_mhz: u32,
     pub pcpu_freq_mhz: u32,
@@ -79,7 +85,17 @@ pub struct SocPower {
 
 impl SocPower {
     pub fn compute_total(&mut self) {
-        self.total_w = self.cpu_w + self.gpu_w + self.ane_w + self.dram_w + self.gpu_sram_w;
+        self.total_w = self.cpu_w
+            + self.gpu_w
+            + self.ane_w
+            + self.dram_w
+            + self.gpu_sram_w
+            + self.isp_w
+            + self.display_soc_w
+            + self.display_ext_w
+            + self.pcie_w
+            + self.media_w
+            + self.fabric_w;
     }
 
     pub fn ecpu_total_w(&self) -> f32 {
