@@ -394,8 +394,8 @@ impl App {
             history: BTreeMap::new(),
             pinned: Vec::new(),
             collapsed: [
-                "wifi", "ssd", "ecpu", "pcpu", "gpu", "ane", "display", "fabric", "usb0", "usb1",
-                "usb2", "usb3", "usb4", "usb5", "usb6", "usb7",
+                "wifi", "bluetooth", "ssd", "ecpu", "pcpu", "gpu", "ane", "display", "fabric",
+                "usb0", "usb1", "usb2", "usb3", "usb4", "usb5", "usb6", "usb7",
             ]
             .into_iter()
             .collect(),
