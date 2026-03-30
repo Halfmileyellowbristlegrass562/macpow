@@ -162,13 +162,16 @@ git push origin main --tags
 cargo publish --dry-run
 cargo publish
 
-# 6. Update Homebrew tap
+# 6. Update Homebrew tap (via PR to trigger bottle building)
 curl -sL https://github.com/k06a/macpow/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
 # Update url + sha256 in homebrew-tap/Formula/macpow.rb
 cd ../homebrew-tap
+git checkout -b update-macpow-X.Y.Z
 git add Formula/macpow.rb
 git commit -m "Update macpow to X.Y.Z"
-git push origin main
+git push origin update-macpow-X.Y.Z
+# Create PR, wait for CI to build bottles, then add label "pr-pull"
+# publish.yml will upload bottles and merge the PR
 ```
 
 ## License

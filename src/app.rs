@@ -982,8 +982,18 @@ impl App {
 
         rows.push(TreeRow::separator());
 
-        // ── Root: machine name with system total
+        // ── Root: machine name with system total (sum of visible children)
+        let display_w = s.display.get() + s.display_soc.get() + s.display_ext.get();
         let display_wh = w.display + w.display_soc + w.display_ext;
+        let sys_w = s.soc_total.get()
+            + s.ssd.get()
+            + display_w
+            + s.keyboard.get()
+            + s.audio.get()
+            + s.fan_total.get()
+            + s.wifi.get()
+            + s.bluetooth.get()
+            + s.pcie.get();
         let sys_wh = w.cpu
             + w.gpu
             + w.ane
@@ -1005,7 +1015,7 @@ impl App {
             None,
             "",
             &self.machine_name,
-            s.sys.get(),
+            sys_w,
             sys_wh,
             BOLD,
             pin("system"),
