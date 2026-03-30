@@ -394,22 +394,8 @@ impl App {
             history: BTreeMap::new(),
             pinned: Vec::new(),
             collapsed: [
-                "wifi",
-                "ssd",
-                "ecpu",
-                "pcpu",
-                "gpu",
-                "ane",
-                "display_soc",
-                "fabric",
-                "usb0",
-                "usb1",
-                "usb2",
-                "usb3",
-                "usb4",
-                "usb5",
-                "usb6",
-                "usb7",
+                "wifi", "ssd", "ecpu", "pcpu", "gpu", "ane", "display", "fabric", "usb0", "usb1",
+                "usb2", "usb3", "usb4", "usb5", "usb6", "usb7",
             ]
             .into_iter()
             .collect(),
@@ -984,19 +970,22 @@ impl App {
         rows.push(TreeRow::separator());
 
         // ── Root: machine name with system total
+        let display_wh = if w.display_soc > 0.0 {
+            w.display_soc + w.display_ext
+        } else {
+            w.display
+        };
         let sys_wh = w.cpu
             + w.gpu
             + w.ane
             + w.dram
             + w.gpu_sram
             + w.isp
-            + w.display_soc
-            + w.display_ext
             + w.pcie
             + w.media
             + w.fabric
             + w.ssd
-            + w.display
+            + display_wh
             + w.keyboard
             + w.audio
             + w.fans
@@ -1027,16 +1016,7 @@ impl App {
                 pin("soc"),
             ));
         } else {
-            let soc_wh = w.cpu
-                + w.gpu
-                + w.ane
-                + w.dram
-                + w.gpu_sram
-                + w.isp
-                + w.display_soc
-                + w.display_ext
-                + w.media
-                + w.fabric;
+            let soc_wh = w.cpu + w.gpu + w.ane + w.dram + w.gpu_sram + w.isp + w.media + w.fabric;
             let cp = c("soc");
 
             rows.push(TreeRow::pw(
@@ -1306,34 +1286,6 @@ impl App {
                 Style::default(),
                 pin("gpu_sram"),
             ));
-            // Display (IOReport measured)
-            {
-                let disp_total = s.display_soc.get() + s.display_ext.get();
-                let disp_wh = w.display_soc + w.display_ext;
-                rows.push(TreeRow::pw(
-                    "display_soc",
-                    Some("soc"),
-                    &format!("{}├─ ", cp),
-                    "Display (SoC)",
-                    disp_total,
-                    disp_wh,
-                    Style::default(),
-                    pin("display_soc"),
-                ));
-                if m.soc.display_ext_w > 0.0 || w.display_ext > 0.0 {
-                    let dc = format!("{}│  ", cp);
-                    rows.push(TreeRow::pw(
-                        "display_ext",
-                        Some("display_soc"),
-                        &format!("{}└─ ", dc),
-                        "External Display",
-                        s.display_ext.get(),
-                        w.display_ext,
-                        Style::default(),
-                        pin("display_ext"),
-                    ));
-                }
-            }
             rows.push(TreeRow::pw(
                 "media",
                 Some("soc"),
@@ -1408,39 +1360,57 @@ impl App {
             rows.push(r);
         }
 
-        // ── Display
-        if m.display.available {
-            let name = if m.display.nits > 0.0 {
-                format!(
-                    "Display ({:.0}% brightness, {:.0} nits)",
-                    m.display.brightness_pct, m.display.nits
-                )
-            } else if m.display.brightness_pct > 0.0 {
-                format!("Display ({:.0}% brightness)", m.display.brightness_pct)
+        // ── Display (prefer IOReport measured power, fallback to brightness estimate)
+        {
+            let has_ior_display = s.display_soc.get() > 0.0 || w.display_soc > 0.0;
+            let disp_w = if has_ior_display {
+                s.display_soc.get() + s.display_ext.get()
             } else {
-                "Display (0% brightness)".into()
+                s.display.get()
             };
+            let disp_wh = if has_ior_display {
+                w.display_soc + w.display_ext
+            } else {
+                w.display
+            };
+            let name = if m.display.available {
+                if m.display.nits > 0.0 {
+                    format!(
+                        "Display ({:.0}% brightness, {:.0} nits)",
+                        m.display.brightness_pct, m.display.nits
+                    )
+                } else if m.display.brightness_pct > 0.0 {
+                    format!("Display ({:.0}% brightness)", m.display.brightness_pct)
+                } else {
+                    "Display (0% brightness)".into()
+                }
+            } else {
+                "Display (off)".into()
+            };
+            let style = if m.display.available { BOLD } else { DIM };
             rows.push(TreeRow::pw(
                 "display",
                 Some("system"),
                 &t("display"),
                 &name,
-                s.display.get(),
-                w.display,
-                BOLD,
+                disp_w,
+                disp_wh,
+                style,
                 pin("display"),
             ));
-        } else {
-            rows.push(TreeRow::pw(
-                "display",
-                Some("system"),
-                &t("display"),
-                "Display (off)",
-                0.0,
-                w.display,
-                DIM,
-                pin("display"),
-            ));
+            if m.soc.display_ext_w > 0.0 || w.display_ext > 0.0 {
+                let dc = c("display");
+                rows.push(TreeRow::pw(
+                    "display_ext",
+                    Some("display"),
+                    &format!("{}└─ ", dc),
+                    "External Display",
+                    s.display_ext.get(),
+                    w.display_ext,
+                    Style::default(),
+                    pin("display_ext"),
+                ));
+            }
         }
 
         // ── Keyboard (always show — 0% brightness is valid, not pending)
