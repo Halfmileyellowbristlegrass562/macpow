@@ -591,50 +591,37 @@ impl App {
         use kbd::key::Key;
         use kbd_crossterm::CrosstermEventExt;
 
-        // Physical key matching (works when terminal supports enhanced keyboard)
+        // Physical key matching — layout-independent (works for any keyboard layout)
         if let Some(hotkey) = key.to_hotkey() {
-            if hotkey == Hotkey::new(Key::Q) {
+            if hotkey == Hotkey::new(Key::Q)
+                || hotkey == Hotkey::new(Key::C).modifier(Modifier::Ctrl)
+            {
                 return true;
             }
-            if hotkey == Hotkey::new(Key::C).modifier(Modifier::Ctrl) {
-                return true;
-            }
-            if hotkey == Hotkey::new(Key::K) {
+            let h = |k| Hotkey::new(k);
+            if hotkey == h(Key::K) {
                 self.move_cursor(-1);
-            }
-            if hotkey == Hotkey::new(Key::J) {
+                return false;
+            } else if hotkey == h(Key::J) {
                 self.move_cursor(1);
-            }
-            if hotkey == Hotkey::new(Key::R) {
+                return false;
+            } else if hotkey == h(Key::R) {
                 self.reset();
-            }
-            if hotkey == Hotkey::new(Key::A) {
+                return false;
+            } else if hotkey == h(Key::A) {
                 self.cycle_sma();
-            }
-            if hotkey == Hotkey::new(Key::H) {
+                return false;
+            } else if hotkey == h(Key::H) {
                 self.collapse_or_parent();
-            }
-            if hotkey == Hotkey::new(Key::L) {
+                return false;
+            } else if hotkey == h(Key::L) {
                 self.cycle_latency();
+                return false;
             }
         }
 
-        // Character fallback (for terminals without enhanced keyboard / non-Latin layouts)
+        // Fallback for non-letter keys and terminals without enhanced keyboard
         match key.code {
-            KeyCode::Char('q') | KeyCode::Char('й') => return true,
-            KeyCode::Char('c') | KeyCode::Char('с')
-                if key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
-                return true
-            }
-            KeyCode::Char('k') | KeyCode::Char('л') => self.move_cursor(-1),
-            KeyCode::Char('j') | KeyCode::Char('о') => self.move_cursor(1),
-            KeyCode::Char('r') | KeyCode::Char('к') => self.reset(),
-            KeyCode::Char('a') | KeyCode::Char('ф') => self.cycle_sma(),
-            KeyCode::Char('l') | KeyCode::Char('д') => self.cycle_latency(),
-            KeyCode::Char('h') | KeyCode::Char('р') => self.collapse_or_parent(),
             KeyCode::Esc => return true,
             KeyCode::Up => self.move_cursor(-1),
             KeyCode::Down => self.move_cursor(1),
