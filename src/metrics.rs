@@ -948,7 +948,7 @@ impl Sampler {
             }));
         }
 
-        // ── WiFi (slow — 10s interval) ──────────────────────────────────
+        // ── WiFi ─────────────────────────────────────────────────────────
         {
             let m = shared.clone();
             handles.push(std::thread::spawn(move || loop {
@@ -956,7 +956,7 @@ impl Sampler {
                 if let Ok(mut mg) = m.lock() {
                     mg.wifi = wifi;
                 }
-                std::thread::sleep(Duration::from_secs(10));
+                std::thread::sleep(dt);
             }));
         }
 

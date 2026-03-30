@@ -182,66 +182,126 @@ unsafe fn list_assertions_inner() -> Option<Vec<PowerAssertion>> {
     Some(result)
 }
 
-// ── WiFi info via system_profiler ────────────────────────────────────────────
+// ── WiFi info via CoreWLAN (ObjC runtime) + ipconfig (SSID fallback) ─────────
+
+#[link(name = "CoreWLAN", kind = "framework")]
+extern "C" {}
+
+extern "C" {
+    fn objc_getClass(name: *const i8) -> *mut libc::c_void;
+    fn sel_registerName(name: *const i8) -> *mut libc::c_void;
+    fn objc_msgSend(obj: *mut libc::c_void, sel: *mut libc::c_void, ...) -> *mut libc::c_void;
+}
+
+fn phy_mode_str(mode: i64) -> &'static str {
+    match mode {
+        1 => "802.11a",
+        2 => "802.11b",
+        3 => "802.11g",
+        4 => "802.11n",
+        5 => "802.11ac",
+        6 => "802.11ax",
+        7 => "802.11be",
+        _ => "",
+    }
+}
+
+fn read_wifi_ssid_ipconfig() -> Option<String> {
+    let output = std::process::Command::new("ipconfig")
+        .args(["getsummary", "en0"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(ssid) = trimmed.strip_prefix("SSID : ") {
+            let s = ssid.trim().to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
 
 pub fn read_wifi_info() -> WifiInfo {
-    let output = match std::process::Command::new("system_profiler")
-        .args(["SPAirPortDataType", "-detailLevel", "basic"])
-        .output()
-    {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-        _ => return WifiInfo::default(),
-    };
-
-    let mut info = WifiInfo::default();
-
-    for line in output.lines() {
-        let l = line.trim();
-        if l.starts_with("Status:") {
-            info.connected = l.contains("Connected");
-        } else if l.starts_with("PHY Mode:") {
-            info.phy_mode = l.strip_prefix("PHY Mode:").unwrap_or("").trim().to_string();
-        } else if l.starts_with("Channel:") {
-            info.channel = l.strip_prefix("Channel:").unwrap_or("").trim().to_string();
-        } else if l.starts_with("Signal / Noise:") {
-            // "Signal / Noise: -57 dBm / -97 dBm"
-            let after_colon = l.split(':').nth(1).unwrap_or("");
-            let halves: Vec<&str> = after_colon.split('/').collect();
-            if halves.len() >= 2 {
-                info.rssi_dbm = halves[0]
-                    .trim()
-                    .replace(" dBm", "")
-                    .trim()
-                    .parse()
-                    .unwrap_or(0);
-                info.noise_dbm = halves[1]
-                    .trim()
-                    .replace(" dBm", "")
-                    .trim()
-                    .parse()
-                    .unwrap_or(0);
-            }
-        } else if l.starts_with("Tx Rate:") {
-            if let Some(v) = l.strip_prefix("Tx Rate:") {
-                info.tx_rate_mbps = v.trim().replace(" Mbps", "").trim().parse().unwrap_or(0.0);
-            }
-        } else if l.starts_with("MCS Index:") {
-            // already have channel/rate, skip
+    unsafe {
+        let cls = objc_getClass(b"CWWiFiClient\0".as_ptr() as _);
+        if cls.is_null() {
+            return WifiInfo::default();
         }
-        // Stop parsing after the first "Other Local" section
-        if l.starts_with("Other Local Wi-Fi") {
-            break;
+        let sel_shared = sel_registerName(b"sharedWiFiClient\0".as_ptr() as _);
+        let client = objc_msgSend(cls, sel_shared);
+        if client.is_null() {
+            return WifiInfo::default();
         }
-    }
+        let sel_iface = sel_registerName(b"interface\0".as_ptr() as _);
+        let iface = objc_msgSend(client, sel_iface);
+        if iface.is_null() {
+            return WifiInfo::default();
+        }
 
-    // WiFi power estimate: ~0.1W idle, up to ~0.8W active, scales with signal strength
-    // Weaker signal = more tx power needed
-    if info.connected {
+        // ssid requires location permission (nil for unsigned binaries since Sonoma)
+        // Fall back to ipconfig getsummary for SSID
+        let sel_ssid = sel_registerName(b"ssid\0".as_ptr() as _);
+        let ssid_ns = objc_msgSend(iface, sel_ssid);
+        let ssid = if !ssid_ns.is_null() {
+            cf_utils::cfstring_to_string(ssid_ns as _).unwrap_or_default()
+        } else {
+            read_wifi_ssid_ipconfig().unwrap_or_default()
+        };
+
+        let connected = !ssid.is_empty();
+        if !connected {
+            return WifiInfo::default();
+        }
+
+        let mut info = WifiInfo {
+            connected: true,
+            ssid,
+            ..Default::default()
+        };
+
+        let sel_rssi = sel_registerName(b"rssiValue\0".as_ptr() as _);
+        info.rssi_dbm = objc_msgSend(iface, sel_rssi) as i64 as i32;
+
+        let sel_noise = sel_registerName(b"noiseMeasurement\0".as_ptr() as _);
+        info.noise_dbm = objc_msgSend(iface, sel_noise) as i64 as i32;
+
+        let sel_tx = sel_registerName(b"transmitRate\0".as_ptr() as _);
+        let tx_raw: u64 = std::mem::transmute(objc_msgSend(iface, sel_tx));
+        info.tx_rate_mbps = f64::from_bits(tx_raw) as f32;
+
+        let sel_phy = sel_registerName(b"activePHYMode\0".as_ptr() as _);
+        let phy_mode = objc_msgSend(iface, sel_phy) as i64;
+        info.phy_mode = phy_mode_str(phy_mode).to_string();
+
+        let sel_chan = sel_registerName(b"wlanChannel\0".as_ptr() as _);
+        let channel = objc_msgSend(iface, sel_chan);
+        if !channel.is_null() {
+            let sel_num = sel_registerName(b"channelNumber\0".as_ptr() as _);
+            let sel_band = sel_registerName(b"channelBand\0".as_ptr() as _);
+            let ch_num = objc_msgSend(channel, sel_num) as i64;
+            let ch_band = objc_msgSend(channel, sel_band) as i64;
+            let band_str = match ch_band {
+                1 => "2GHz",
+                2 => "5GHz",
+                3 => "6GHz",
+                _ => "",
+            };
+            if !band_str.is_empty() {
+                info.channel = format!("{} ({})", ch_num, band_str);
+            } else {
+                info.channel = format!("{}", ch_num);
+            }
+        }
+
+        // WiFi power estimate: ~0.1W idle, up to ~0.8W active, scales with signal strength
         let signal_quality = ((info.rssi_dbm + 100).max(0).min(60)) as f32 / 60.0;
         info.estimated_power_w = 0.1 + (1.0 - signal_quality) * 0.7;
-    }
 
-    info
+        info
+    }
 }
 
 // ── Bluetooth connected devices via system_profiler ──────────────────────────
