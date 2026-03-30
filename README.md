@@ -3,10 +3,10 @@
 Real-time power consumption monitor for Apple Silicon Macs (M1–M5+).
 
 <p align="center">
-  <img src="./screenshot.png" width="50%" alt="macpow screenshot">
+  <img src="./screenshot.png" width="75%" alt="macpow screenshot">
 </p>
 
-macpow reads directly from macOS hardware interfaces — IOReport, SMC, IORegistry, and kernel APIs — to show per-component power draw, temperatures, frequencies, CPU utilization, and per-process energy attribution. No sudo required.
+**macpow** reads directly from macOS hardware interfaces — IOReport, SMC, IORegistry, and kernel APIs — to show per-component power draw, temperatures, frequencies, CPU utilization, and per-process energy attribution. No sudo required.
 
 ## Features
 
