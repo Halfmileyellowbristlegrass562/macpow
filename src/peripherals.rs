@@ -315,36 +315,83 @@ pub fn read_bluetooth_devices() -> Vec<BluetoothDevice> {
         _ => return Vec::new(),
     };
 
-    let mut devices = Vec::new();
+    // Parse raw entries: (name, id, battery_pct, is_charging)
+    let mut raw: Vec<(String, u64, String, bool)> = Vec::new();
     for line in output.lines() {
         let trimmed = line.trim();
-        // Skip internal battery and header lines
         if trimmed.starts_with("-InternalBattery")
             || trimmed.starts_with("Now drawing")
             || trimmed.is_empty()
         {
             continue;
         }
-        // Format: " -DeviceName (id=N)\tPCT%; status; time remaining present: true"
         if let Some(name_end) = trimmed.find(" (id=") {
             let name = trimmed[1..name_end].trim_start_matches('-').trim();
+            let id_str = trimmed[name_end + 5..].split(')').next().unwrap_or("0");
+            let id: u64 = id_str.parse().unwrap_or(0);
             let after_tab = trimmed.split('\t').nth(1).unwrap_or("");
             let pct = after_tab.split('%').next().unwrap_or("").trim();
-            if !name.is_empty() {
-                let battery_str = if !pct.is_empty() {
-                    format!("{}%", pct)
-                } else {
-                    String::new()
-                };
+            let is_charging = after_tab.contains("charging") && !after_tab.contains("discharging");
+            if !name.is_empty() && !pct.is_empty() {
+                raw.push((name.to_string(), id, format!("{}%", pct), is_charging));
+            }
+        }
+    }
+
+    // Sort by id so lower id = Left, higher id = Right
+    raw.sort_by_key(|r| r.1);
+
+    // Group by base name: "X Case" → child of "X", duplicate "X" → Left/Right
+    let mut devices: Vec<BluetoothDevice> = Vec::new();
+    let mut name_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for (name, _, _, _) in &raw {
+        if !name.ends_with(" Case") {
+            *name_counts.entry(name.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let mut seen_base: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (name, _, pct, is_charging) in &raw {
+        if name.ends_with(" Case") {
+            let base = name.trim_end_matches(" Case");
+            let idx = devices.iter().position(|d| d.name == base);
+            if let Some(i) = idx {
+                devices[i].batteries.push(("Case".to_string(), pct.clone()));
+            } else {
                 devices.push(BluetoothDevice {
-                    name: name.to_string(),
+                    name: base.to_string(),
                     minor_type: String::new(),
                     connected: true,
-                    batteries: if battery_str.is_empty() {
-                        vec![]
-                    } else {
-                        vec![(String::new(), battery_str)]
-                    },
+                    batteries: vec![("Case".to_string(), pct.clone())],
+                });
+            }
+        } else {
+            let count = name_counts.get(name.as_str()).copied().unwrap_or(1);
+            let nth = seen_base.entry(name.clone()).or_insert(0);
+            let label = if count >= 2 {
+                // Lower id = Left (sorted first), higher = Right
+                let suffix = if *is_charging { ", in case" } else { "" };
+                let l = if *nth == 0 {
+                    format!("Left{}", suffix)
+                } else {
+                    format!("Right{}", suffix)
+                };
+                *nth += 1;
+                l
+            } else {
+                String::new()
+            };
+            let idx = devices.iter().position(|d| d.name == *name);
+            if let Some(i) = idx {
+                devices[i].batteries.push((label, pct.clone()));
+            } else {
+                devices.push(BluetoothDevice {
+                    name: name.clone(),
+                    minor_type: String::new(),
+                    connected: true,
+                    batteries: vec![(label, pct.clone())],
                 });
             }
         }
