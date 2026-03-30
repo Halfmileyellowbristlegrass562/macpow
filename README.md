@@ -139,6 +139,38 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 - Apple Silicon (M1, M2, M3, M4, M5 — any variant)
 - Rust 1.70+
 
+## Release checklist
+
+```bash
+# 1. Bump version
+vim Cargo.toml                        # update version = "X.Y.Z"
+
+# 2. Build to update Cargo.lock
+cargo build --release
+
+# 3. Update Homebrew badge in README.md
+#    Change: homebrew-vX.Y.Z in the badge URL
+
+# 4. Commit, tag, push
+git add -A
+git commit -m "Bump version to X.Y.Z"
+git tag vX.Y.Z
+git push origin main --tags
+# CI will auto-create GitHub Release with binary
+
+# 5. Publish to crates.io
+cargo publish --dry-run
+cargo publish
+
+# 6. Update Homebrew tap
+curl -sL https://github.com/k06a/macpow/archive/refs/tags/vX.Y.Z.tar.gz | shasum -a 256
+# Update url + sha256 in homebrew-tap/Formula/macpow.rb
+cd ../homebrew-tap
+git add Formula/macpow.rb
+git commit -m "Update macpow to X.Y.Z"
+git push origin main
+```
+
 ## License
 
 [MIT](LICENSE)
