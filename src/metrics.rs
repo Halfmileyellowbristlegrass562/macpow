@@ -1017,7 +1017,7 @@ impl Sampler {
                     let mut procs: Vec<ProcessPower> = known
                         .iter()
                         .filter(|(_, (_, _, mj, _, _, _))| *mj > 0.0)
-                        .map(|(&pid, (name, _, session_mj, delta_nj, dt_s, seen))| {
+                        .map(|(&pid, (name, _, session_mj, delta_nj, dt_s, _seen))| {
                             let power_w = if *dt_s > 0.01 {
                                 (*delta_nj as f64 / 1e9 / dt_s) as f32
                             } else {

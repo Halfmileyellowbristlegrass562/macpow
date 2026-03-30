@@ -269,7 +269,7 @@ pub fn read_wifi_info() -> WifiInfo {
         info.noise_dbm = objc_msgSend(iface, sel_noise) as i64 as i32;
 
         let sel_tx = sel_registerName(b"transmitRate\0".as_ptr() as _);
-        let tx_raw: u64 = std::mem::transmute(objc_msgSend(iface, sel_tx));
+        let tx_raw = objc_msgSend(iface, sel_tx) as u64;
         info.tx_rate_mbps = f64::from_bits(tx_raw) as f32;
 
         let sel_phy = sel_registerName(b"activePHYMode\0".as_ptr() as _);
