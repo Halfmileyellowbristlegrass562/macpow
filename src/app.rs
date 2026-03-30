@@ -4,7 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Sparkline};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
@@ -29,6 +29,7 @@ const COL_CUR: u16 = 14;
 const COL_TOT: u16 = 14;
 
 const SPARK_CHARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '▇'];
+const BAR_EIGHTHS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 fn power_color(w: f32) -> Color {
     match w {
@@ -2059,15 +2060,6 @@ impl App {
             let vis_max = visible_data.iter().copied().fold(0.0f64, f64::max);
             let scale_max = nice_scale(vis_max);
 
-            let vals: Vec<u64> = if scale_max > 0.0 {
-                visible_data
-                    .iter()
-                    .map(|&v| (v / scale_max * 1000.0).round() as u64)
-                    .collect()
-            } else {
-                vec![0]
-            };
-
             let is_data = matches!(key, "net_down" | "net_up" | "disk_read" | "disk_write");
             let scale_h = inner[0].height;
             let fmt_axis = |v: f64| -> String {
@@ -2097,31 +2089,64 @@ impl App {
             } else {
                 format!("{:.3} W", current)
             };
-            let spark = Sparkline::default()
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(DIM)
-                        .title(Span::styled(
-                            format!(
-                                " {} — {}{}",
-                                self.labels.get(key).map(|s| s.as_str()).unwrap_or(key),
-                                title_value,
-                                pin_icon
-                            ),
-                            title_style,
-                        )),
-                )
-                .data(&vals)
-                .max(1000)
-                .style(Style::default().fg(
-                    if matches!(key, "net_down" | "net_up" | "disk_read" | "disk_write") {
-                        Color::Rgb(80, 140, 255)
-                    } else {
-                        power_color(current as f32)
-                    },
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(DIM)
+                .title(Span::styled(
+                    format!(
+                        " {} — {}{}",
+                        self.labels.get(key).map(|s| s.as_str()).unwrap_or(key),
+                        title_value,
+                        pin_icon
+                    ),
+                    title_style,
                 ));
-            f.render_widget(spark, inner[1]);
+            let chart_inner = block.inner(inner[1]);
+            f.render_widget(block, inner[1]);
+
+            if chart_inner.width == 0 || chart_inner.height == 0 || scale_max <= 0.0 {
+                continue;
+            }
+
+            let buf = f.buffer_mut();
+            let inner_h = chart_inner.height as usize;
+            let max_eighths = inner_h * 8;
+            let bottom_y = chart_inner.y + chart_inner.height - 1;
+
+            for (ci, &val) in visible_data.iter().enumerate() {
+                let x = chart_inner.x + (vis_w.saturating_sub(visible_data.len()) + ci) as u16;
+                if x >= chart_inner.right() {
+                    continue;
+                }
+                let color = if is_data {
+                    Color::Rgb(80, 140, 255)
+                } else {
+                    power_color(val as f32)
+                };
+                let bar_eighths =
+                    ((val / scale_max * max_eighths as f64).round() as usize).min(max_eighths);
+                let full_rows = bar_eighths / 8;
+                let remainder = bar_eighths % 8;
+                let style = Style::default().fg(color);
+
+                for row in 0..full_rows {
+                    let y = bottom_y.saturating_sub(row as u16);
+                    if y >= chart_inner.y {
+                        buf.set_string(x, y, "█", style);
+                    }
+                }
+                if remainder > 0 {
+                    let y = bottom_y.saturating_sub(full_rows as u16);
+                    if y >= chart_inner.y {
+                        buf.set_string(
+                            x,
+                            y,
+                            BAR_EIGHTHS[remainder].to_string(),
+                            style,
+                        );
+                    }
+                }
+            }
         }
     }
 
