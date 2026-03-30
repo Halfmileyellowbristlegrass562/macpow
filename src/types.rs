@@ -2,7 +2,7 @@ use clap::Parser;
 use serde::Serialize;
 
 #[derive(Parser, Debug)]
-#[command(name = "macpow", about = "Apple Silicon Power Monitor TUI")]
+#[command(name = "macpow", version, about = "Apple Silicon Power Monitor TUI")]
 pub struct CliArgs {
     /// Sampling interval in milliseconds
     #[arg(long, default_value_t = 500)]
