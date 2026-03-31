@@ -488,7 +488,7 @@ impl App {
                 "usb7",
             ]
             .into_iter()
-            .chain(["ethernet", "ssd_nand", "trackpad"].into_iter())
+            .chain(["ethernet", "ssd_nand", "trackpad"])
             .collect(),
             total_rows: 0,
             row_keys_cache: Vec::new(),
@@ -1080,7 +1080,9 @@ impl App {
         }
 
         // ── Battery (standalone row before the tree)
-        if m.battery.present {
+        // Desktop Macs report a phantom battery (present=true, all values zero);
+        // skip when max_capacity is 0 to avoid showing "Battery 0%".
+        if m.battery.present && m.battery.max_capacity > 0 {
             let batt_w = s.battery.get();
             let t = m.battery.time_remaining_min;
             let has_time = t > 0;
