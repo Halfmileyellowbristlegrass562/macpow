@@ -66,7 +66,7 @@ fn load_display_brightness_fn() -> Option<unsafe extern "C" fn(u32, *mut f32) ->
 }
 
 /// Read current display brightness (0.0–1.0) via DisplayServices private framework.
-fn read_display_brightness() -> Option<f32> {
+pub fn read_display_brightness() -> Option<f32> {
     let get_brightness = (*DISPLAY_BRIGHTNESS_FN.get_or_init(load_display_brightness_fn))?;
     unsafe {
         let display = CGMainDisplayID();
@@ -275,7 +275,7 @@ const AUDIO_OBJECT_PROP_SCOPE_OUTPUT: u32 = u32::from_be_bytes(*b"outp");
 const AUDIO_OBJECT_PROP_SCOPE_GLOBAL: u32 = u32::from_be_bytes(*b"glob");
 const AUDIO_OBJECT_PROP_ELEMENT_MAIN: u32 = 0;
 
-fn read_audio_volume() -> (Option<f32>, bool) {
+pub fn read_audio_volume() -> (Option<f32>, bool) {
     unsafe {
         let addr = AudioObjectPropertyAddress {
             selector: AUDIO_HARDWARE_PROP_DEFAULT_OUTPUT,
@@ -401,7 +401,7 @@ const RUSAGE_INFO_V4: i32 = 4;
 const BILLED_ENERGY_OFFSET: usize = 16 + 31 * 8; // = 264
 const RUSAGE_V4_SIZE: usize = 16 + 35 * 8; // = 296
 
-fn read_all_process_energy() -> std::collections::HashMap<i32, (String, u64)> {
+pub fn read_all_process_energy() -> std::collections::HashMap<i32, (String, u64)> {
     let mut result = std::collections::HashMap::new();
     unsafe {
         let mut pids = vec![0i32; 4096];
@@ -508,7 +508,7 @@ const HOST_VM_INFO64: i32 = 4;
 const HOST_VM_INFO64_COUNT: u32 = 38; // sizeof(vm_statistics64_data_t) / sizeof(integer_t)
 const PAGE_SIZE: u64 = 16384;
 
-fn read_mem_used_gb() -> f32 {
+pub fn read_mem_used_gb() -> f32 {
     #[repr(C)]
     struct VmStats64 {
         free_count: u32,
@@ -556,7 +556,7 @@ fn read_mem_used_gb() -> f32 {
     }
 }
 
-fn read_gpu_utilization() -> (u32, u32, u32) {
+pub fn read_gpu_utilization() -> (u32, u32, u32) {
     static GPU_CLASS: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
 
     let cached = GPU_CLASS.get_or_init(|| {
@@ -646,7 +646,7 @@ const CPU_STATE_IDLE: usize = 2;
 // const CPU_STATE_NICE: usize = 3;
 const CPU_LOAD_FIELDS: usize = 4;
 
-fn read_cpu_ticks() -> Vec<(u64, u64)> {
+pub fn read_cpu_ticks() -> Vec<(u64, u64)> {
     unsafe {
         let mut ncpu: u32 = 0;
         let mut info: *mut i32 = std::ptr::null_mut();
