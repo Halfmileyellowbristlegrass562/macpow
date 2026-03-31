@@ -1172,40 +1172,9 @@ impl App {
 
         rows.push(TreeRow::separator());
 
-        // ── Root: machine name with system total (sum of visible children)
-        let has_pdbr = m.backlight_power_w > 0.0;
-        let bl_w = if has_pdbr {
-            s.backlight.get()
-        } else {
-            s.display.get()
-        };
-        let display_w = bl_w + s.display_soc.get() + s.display_ext.get();
-        let display_wh = w.backlight + w.display_soc + w.display_ext;
-        let sys_w = s.soc_total.get()
-            + s.ssd.get()
-            + display_w
-            + s.keyboard.get()
-            + s.audio.get()
-            + s.fan_total.get()
-            + s.wifi.get()
-            + s.bluetooth.get()
-            + s.pcie.get();
-        let sys_wh = w.cpu
-            + w.gpu
-            + w.ane
-            + w.dram
-            + w.gpu_sram
-            + w.isp
-            + w.pcie
-            + w.media
-            + w.fabric
-            + w.ssd
-            + display_wh
-            + w.keyboard
-            + w.audio
-            + w.fans
-            + w.wifi
-            + w.bluetooth;
+        // ── Root: machine name with system total (SMC PSTR)
+        let sys_w = s.sys.get();
+        let sys_wh = w.sys;
         rows.push(TreeRow::pw(
             "system",
             None,
