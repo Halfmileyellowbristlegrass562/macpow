@@ -135,7 +135,7 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | Bluetooth | pmset | Fixed per device type (0.01-0.05W) |
 | SSD | IORegistry counters | I/O utilization: 0.03-2.5W |
 | Network | getifaddrs | Byte counters (no power model, data only) |
-| USB | IORegistry | bMaxPower * 5V |
+| USB | IORegistry PowerOutDetails | Per-port power measurement (Watts/PDPowermW) |
 
 ## Requirements
 

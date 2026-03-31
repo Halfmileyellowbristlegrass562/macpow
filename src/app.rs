@@ -1733,11 +1733,15 @@ impl App {
 
         // ── Peripherals
         let pc = c("peripherals");
-        let usb_total_w: f32 = m
-            .usb_devices
-            .iter()
-            .map(|d| d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0)
-            .sum();
+        let has_usb_power_out = m.usb_power_out_w > 0.0;
+        let usb_total_w: f32 = if has_usb_power_out {
+            m.usb_power_out_w
+        } else {
+            m.usb_devices
+                .iter()
+                .map(|d| d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0)
+                .sum()
+        };
         let usb_total_wh: f64 = self.usb_wh.iter().sum();
         rows.push(TreeRow::pw_est(
             "peripherals",
@@ -1884,7 +1888,12 @@ impl App {
                 DIM,
             ));
         } else {
-            rows.push(TreeRow::pw_est(
+            let usb_row_fn = if has_usb_power_out {
+                TreeRow::pw
+            } else {
+                TreeRow::pw_est
+            };
+            rows.push(usb_row_fn(
                 "usb",
                 Some("peripherals"),
                 &format!("{}└─ ", pc),
@@ -1905,7 +1914,21 @@ impl App {
                 } else {
                     format!("{}   │  ", pc)
                 };
-                let watts = d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0;
+                let port_idx = (d.location_id >> 20) & 0xF;
+                let real_power = m
+                    .usb_power_per_port
+                    .iter()
+                    .find(|(idx, _)| *idx == port_idx)
+                    .map(|(_, w)| *w);
+                let (watts, is_measured) = if let Some(rp) = real_power {
+                    if rp > 0.0 {
+                        (rp, true)
+                    } else {
+                        (d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0, false)
+                    }
+                } else {
+                    (d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0, false)
+                };
                 let usb_wh_val = self.usb_wh.get(i).copied().unwrap_or(0.0);
                 let key = usb_key(i);
                 let speed_str = match d.speed {
@@ -1918,7 +1941,12 @@ impl App {
                     _ => "?",
                 };
                 let pwr_str = d.power_ma.map(|p| format!(", {}mA", p)).unwrap_or_default();
-                rows.push(TreeRow::pw_est(
+                let row_fn = if is_measured {
+                    TreeRow::pw
+                } else {
+                    TreeRow::pw_est
+                };
+                rows.push(row_fn(
                     key,
                     Some("usb"),
                     &pfx,

@@ -141,3 +141,56 @@ unsafe fn read_adapter_inner() -> Option<AdapterInfo> {
         is_wireless,
     })
 }
+
+/// Read USB power output per port from PowerOutDetails in AppleSmartBattery.
+/// Returns Vec of (port_index, power_w).
+pub fn read_usb_power_out_per_port() -> Vec<(u32, f32)> {
+    unsafe { read_usb_power_per_port_inner().unwrap_or_default() }
+}
+
+unsafe fn read_usb_power_per_port_inner() -> Option<Vec<(u32, f32)>> {
+    use core_foundation_sys::array::CFArrayRef;
+
+    let matching = IOServiceMatching(b"AppleSmartBattery\0".as_ptr() as *const i8);
+    if matching.is_null() {
+        return None;
+    }
+    let service = IOServiceGetMatchingService(0, matching);
+    if service == 0 {
+        return None;
+    }
+
+    let mut props = std::ptr::null_mut();
+    let kr = IORegistryEntryCreateCFProperties(service, &mut props, std::ptr::null(), 0);
+    IOObjectRelease(service);
+    if kr != 0 || props.is_null() {
+        return None;
+    }
+
+    let dict = props as CFDictionaryRef;
+    let arr_ref = cf_utils::cfdict_get(dict, "PowerOutDetails");
+    if arr_ref.is_null() {
+        cf_utils::cf_release(props as _);
+        return None;
+    }
+
+    let arr = arr_ref as CFArrayRef;
+    let count = cf_utils::cfarray_len(arr);
+    let mut ports = Vec::new();
+    for i in 0..count {
+        let entry = cf_utils::cfarray_get(arr, i);
+        if !entry.is_null() {
+            let d = entry as CFDictionaryRef;
+            let port_idx = cf_utils::cfdict_get_i64(d, "PortIndex").unwrap_or(-1);
+            let watts_mw = cf_utils::cfdict_get_i64(d, "Watts").unwrap_or(0);
+            let pd_mw = cf_utils::cfdict_get_i64(d, "PDPowermW").unwrap_or(0);
+            let power_mw = if watts_mw > 0 { watts_mw } else { pd_mw };
+            if port_idx >= 0 {
+                ports.push((port_idx as u32, power_mw as f32 / 1000.0));
+            }
+        }
+    }
+
+    cf_utils::cf_release(props as _);
+    Some(ports)
+}

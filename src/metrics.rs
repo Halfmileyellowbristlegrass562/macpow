@@ -1025,9 +1025,12 @@ impl Sampler {
             handles.push(std::thread::spawn(move || loop {
                 let usb = peripherals::list_usb_devices();
                 let asserts = peripherals::list_power_assertions();
+                let usb_ports = battery::read_usb_power_out_per_port();
                 if let Ok(mut mg) = m.lock() {
                     mg.usb_devices = usb;
                     mg.power_assertions = asserts;
+                    mg.usb_power_out_w = usb_ports.iter().map(|(_, w)| w).sum();
+                    mg.usb_power_per_port = usb_ports;
                 }
                 std::thread::sleep(dt);
             }));

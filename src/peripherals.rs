@@ -43,6 +43,7 @@ unsafe fn list_usb_inner() -> Option<Vec<UsbDevice>> {
         let mut product_id: u32 = 0;
         let mut power_ma: Option<u32> = None;
         let mut speed: u32 = 0;
+        let mut location_id: u32 = 0;
 
         if IORegistryEntryCreateCFProperties(entry, &mut props, std::ptr::null(), 0) == 0
             && !props.is_null()
@@ -55,6 +56,7 @@ unsafe fn list_usb_inner() -> Option<Vec<UsbDevice>> {
                 .or_else(|| cf_utils::cfdict_get_i64(dict, "bMaxPower"))
                 .map(|v| v as u32);
             speed = cf_utils::cfdict_get_i64(dict, "Device Speed").unwrap_or(0) as u32;
+            location_id = cf_utils::cfdict_get_i64(dict, "locationID").unwrap_or(0) as u32;
             cf_utils::cf_release(props as _);
         }
 
@@ -68,6 +70,7 @@ unsafe fn list_usb_inner() -> Option<Vec<UsbDevice>> {
             product_id,
             power_ma,
             speed,
+            location_id,
             bytes_read,
             bytes_written,
         });
