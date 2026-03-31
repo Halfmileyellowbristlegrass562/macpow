@@ -751,30 +751,38 @@ impl App {
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseButton, MouseEventKind};
-        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-            let y = mouse.row;
-            if y >= self.tree_data_y {
-                let vi = (y - self.tree_data_y) as usize;
-                if vi < self.tree_vis_h {
-                    let target = self.tree_scroll + vi;
-                    if target < self.total_rows
-                        && !self.row_is_sep.get(target).copied().unwrap_or(false)
-                    {
-                        if target == self.cursor {
-                            // Click on selected row: toggle collapse
-                            if let Some(Some(key)) = self.row_keys_cache.get(self.cursor) {
-                                if self.collapsed.contains(key) {
-                                    self.collapsed.remove(key);
-                                } else if self.row_parents_cache.contains(&Some(*key)) {
-                                    self.collapsed.insert(*key);
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let y = mouse.row;
+                if y >= self.tree_data_y {
+                    let vi = (y - self.tree_data_y) as usize;
+                    if vi < self.tree_vis_h {
+                        let target = self.tree_scroll + vi;
+                        if target < self.total_rows
+                            && !self.row_is_sep.get(target).copied().unwrap_or(false)
+                        {
+                            if target == self.cursor {
+                                if let Some(Some(key)) = self.row_keys_cache.get(self.cursor) {
+                                    if self.collapsed.contains(key) {
+                                        self.collapsed.remove(key);
+                                    } else if self.row_parents_cache.contains(&Some(*key)) {
+                                        self.collapsed.insert(*key);
+                                    }
                                 }
+                            } else {
+                                self.cursor = target;
                             }
-                        } else {
-                            self.cursor = target;
                         }
                     }
                 }
             }
+            MouseEventKind::ScrollUp => {
+                self.cursor = self.cursor.saturating_sub(3);
+            }
+            MouseEventKind::ScrollDown => {
+                self.cursor = (self.cursor + 3).min(self.total_rows.saturating_sub(1));
+            }
+            _ => {}
         }
     }
 
