@@ -77,6 +77,15 @@ pub unsafe fn cfarray_get(arr: CFArrayRef, idx: isize) -> CFTypeRef {
     CFArrayGetValueAtIndex(arr, idx)
 }
 
+/// Get a nested `CFDictionaryRef` from a dictionary by key.
+pub unsafe fn cfdict_get_dict(dict: CFDictionaryRef, key: &str) -> Option<CFDictionaryRef> {
+    let val = cfdict_get(dict, key);
+    if val.is_null() {
+        return None;
+    }
+    Some(val as CFDictionaryRef)
+}
+
 /// Create a mutable copy of a `CFDictionaryRef`.
 pub unsafe fn cfdict_mutable_copy(dict: CFDictionaryRef) -> CFMutableDictionaryRef {
     CFDictionaryCreateMutableCopy(std::ptr::null(), 0, dict)

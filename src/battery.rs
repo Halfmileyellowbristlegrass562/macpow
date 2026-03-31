@@ -1,10 +1,14 @@
 use crate::cf_utils;
 use crate::iokit_ffi::*;
-use crate::types::BatteryInfo;
+use crate::types::{AdapterInfo, BatteryInfo};
 use core_foundation_sys::dictionary::CFDictionaryRef;
 
 pub fn read_battery() -> BatteryInfo {
     unsafe { read_battery_inner().unwrap_or_default() }
+}
+
+pub fn read_adapter() -> AdapterInfo {
+    unsafe { read_adapter_inner().unwrap_or_default() }
 }
 
 unsafe fn read_battery_inner() -> Option<BatteryInfo> {
@@ -40,9 +44,22 @@ unsafe fn read_battery_inner() -> Option<BatteryInfo> {
     let nominal_charge_mah = cf_utils::cfdict_get_f64(dict, "NominalChargeCapacity").unwrap_or(0.0);
     let capacity_wh = nominal_charge_mah * voltage_mv / 1_000_000.0;
 
+    // Temperature is in hundredths of a degree Celsius (e.g. 3045 = 30.45°C)
+    let temp_raw = cf_utils::cfdict_get_f64(dict, "Temperature").unwrap_or(0.0);
+    let temperature_c = temp_raw / 100.0;
+
+    let cycle_count = cf_utils::cfdict_get_i64(dict, "CycleCount").unwrap_or(0);
+    let design_capacity_mah = cf_utils::cfdict_get_f64(dict, "DesignCapacity").unwrap_or(0.0);
+    let max_capacity_mah =
+        cf_utils::cfdict_get_f64(dict, "AppleRawMaxCapacity").unwrap_or(design_capacity_mah);
+    let health_pct = if design_capacity_mah > 0.0 {
+        max_capacity_mah / design_capacity_mah * 100.0
+    } else {
+        100.0
+    };
+
     let is_charging = os_is_charging;
     let power_w = voltage_mv * amperage_ma.abs() / 1_000_000.0;
-    // drain_w: negative = charging (energy in), positive = discharging (energy out)
     let drain_w = if external { -power_w } else { power_w };
     let percent = if max_cap > 0 {
         (current_cap as f64 / max_cap as f64) * 100.0
@@ -50,7 +67,6 @@ unsafe fn read_battery_inner() -> Option<BatteryInfo> {
         0.0
     };
 
-    // Pass raw macOS estimate; metrics thread will compute SMA-based fallback
     let time_remaining = if raw_time > 0 && raw_time < 6000 {
         raw_time
     } else {
@@ -71,5 +87,57 @@ unsafe fn read_battery_inner() -> Option<BatteryInfo> {
         percent,
         time_remaining_min: time_remaining,
         external_connected: external,
+        temperature_c,
+        cycle_count,
+        design_capacity_mah,
+        max_capacity_mah,
+        health_pct,
+    })
+}
+
+unsafe fn read_adapter_inner() -> Option<AdapterInfo> {
+    let matching = IOServiceMatching(b"AppleSmartBattery\0".as_ptr() as *const i8);
+    if matching.is_null() {
+        return None;
+    }
+    let service = IOServiceGetMatchingService(0, matching);
+    if service == 0 {
+        return None;
+    }
+
+    let mut props = std::ptr::null_mut();
+    let kr = IORegistryEntryCreateCFProperties(service, &mut props, std::ptr::null(), 0);
+    IOObjectRelease(service);
+    if kr != 0 || props.is_null() {
+        return None;
+    }
+
+    let dict = props as CFDictionaryRef;
+    let external = cf_utils::cfdict_get_bool(dict, "ExternalConnected").unwrap_or(false);
+
+    if !external {
+        cf_utils::cf_release(props as _);
+        return Some(AdapterInfo::default());
+    }
+
+    let adapter = cf_utils::cfdict_get_dict(dict, "AdapterDetails");
+    let (watts, voltage_mv, current_ma, is_wireless) = if let Some(ad) = adapter {
+        let w = cf_utils::cfdict_get_i64(ad, "Watts").unwrap_or(0) as u32;
+        let v = cf_utils::cfdict_get_i64(ad, "AdapterVoltage").unwrap_or(0) as u32;
+        let a = cf_utils::cfdict_get_i64(ad, "Current").unwrap_or(0) as u32;
+        let wireless = cf_utils::cfdict_get_bool(ad, "IsWireless").unwrap_or(false);
+        (w, v, a, wireless)
+    } else {
+        (0, 0, 0, false)
+    };
+
+    cf_utils::cf_release(props as _);
+
+    Some(AdapterInfo {
+        connected: true,
+        watts,
+        voltage_mv,
+        current_ma,
+        is_wireless,
     })
 }

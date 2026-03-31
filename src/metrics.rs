@@ -123,6 +123,96 @@ fn read_display_max_nits() -> f32 {
     }
 }
 
+/// Assumed backlight LED string voltage (not exposed by macOS).
+const BACKLIGHT_VOLTAGE_V: f32 = 6.0;
+
+/// Read backlight calibration: max current in mA (static, read once).
+fn read_backlight_max_current_ma() -> f32 {
+    unsafe {
+        let matching = IOServiceMatching(b"AppleARMBacklight\0".as_ptr() as *const i8);
+        if matching.is_null() {
+            return 0.0;
+        }
+        let mut iter: u32 = 0;
+        if IOServiceGetMatchingServices(0, matching, &mut iter) != 0 {
+            return 0.0;
+        }
+        let service = IOIteratorNext(iter);
+        if service == 0 {
+            IOObjectRelease(iter);
+            return 0.0;
+        }
+
+        let mut props = std::ptr::null_mut();
+        let kr = IORegistryEntryCreateCFProperties(service, &mut props, std::ptr::null(), 0);
+        IOObjectRelease(service);
+        IOObjectRelease(iter);
+        if kr != 0 || props.is_null() {
+            return 0.0;
+        }
+
+        let dict = props as core_foundation_sys::dictionary::CFDictionaryRef;
+        let cal = cf_utils::cfdict_get(dict, "backlight-calibration-parameters");
+        let max_ua = if !cal.is_null() {
+            cf_utils::cfdict_get_i64(cal as _, "current-for-max-backlight").unwrap_or(0)
+        } else {
+            0
+        };
+        cf_utils::cf_release(props as _);
+
+        max_ua as f32 / 1000.0
+    }
+}
+
+/// Read current BrightnessMicroAmps from AppleARMBacklight IODisplayParameters.
+/// Returns (current_ua, max_ua) or None if unavailable.
+pub fn read_backlight_current() -> Option<(i64, i64)> {
+    unsafe {
+        let matching = IOServiceMatching(b"AppleARMBacklight\0".as_ptr() as *const i8);
+        if matching.is_null() {
+            return None;
+        }
+        let mut iter: u32 = 0;
+        if IOServiceGetMatchingServices(0, matching, &mut iter) != 0 {
+            return None;
+        }
+        let service = IOIteratorNext(iter);
+        if service == 0 {
+            IOObjectRelease(iter);
+            return None;
+        }
+
+        let mut props = std::ptr::null_mut();
+        let kr = IORegistryEntryCreateCFProperties(service, &mut props, std::ptr::null(), 0);
+        IOObjectRelease(service);
+        IOObjectRelease(iter);
+        if kr != 0 || props.is_null() {
+            return None;
+        }
+
+        let dict = props as core_foundation_sys::dictionary::CFDictionaryRef;
+        let params = cf_utils::cfdict_get(dict, "IODisplayParameters");
+        if params.is_null() {
+            cf_utils::cf_release(props as _);
+            return None;
+        }
+        let ua = cf_utils::cfdict_get(params as _, "BrightnessMicroAmps");
+        if ua.is_null() {
+            cf_utils::cf_release(props as _);
+            return None;
+        }
+        let cur = cf_utils::cfdict_get_i64(ua as _, "value").unwrap_or(0);
+        let max = cf_utils::cfdict_get_i64(ua as _, "max").unwrap_or(0);
+        cf_utils::cf_release(props as _);
+
+        if max > 0 {
+            Some((cur, max))
+        } else {
+            None
+        }
+    }
+}
+
 /// Keyboard backlight: reverse-map PWM duty cycle through the nits-to-pwm table
 /// to recover the actual 0-100% brightness level.
 fn read_keyboard_brightness() -> Option<f32> {
@@ -780,6 +870,9 @@ impl Sampler {
                     let temps = smc.read_temperatures();
                     let fans = smc.read_fans();
                     let sys_power = smc.read_system_power();
+                    let backlight_power = smc.read_f32("PDBR").unwrap_or(0.0);
+                    let adapter_power = smc.read_f32("PDTR").unwrap_or(0.0);
+                    let wifi_power = smc.read_f32("wiPm").unwrap_or(0.0);
                     let cur_ticks = read_cpu_ticks();
                     let cpu_usage = compute_cpu_usage(&prev_ticks, &cur_ticks);
                     prev_ticks = cur_ticks;
@@ -791,6 +884,9 @@ impl Sampler {
                         } else {
                             mg.soc.total_w
                         };
+                        mg.backlight_power_w = backlight_power;
+                        mg.adapter_power_w = adapter_power;
+                        mg.wifi_power_w = wifi_power;
                         mg.mem_used_gb = read_mem_used_gb();
                         mg.cpu_usage_pct = cpu_usage;
                         let (_, gr, gt) = read_gpu_utilization();
@@ -833,6 +929,7 @@ impl Sampler {
                     }
                     if let Ok(mut mg) = m.lock() {
                         mg.battery = b;
+                        mg.adapter = battery::read_adapter();
                     }
                     std::thread::sleep(dt);
                 }
@@ -842,13 +939,24 @@ impl Sampler {
         // ── Display brightness ───────────────────────────────────────────
         {
             let m = shared.clone();
+            let cal_max_ma = read_backlight_max_current_ma();
             handles.push(std::thread::spawn(move || loop {
+                let brightness = read_display_brightness();
+                let backlight_current = read_backlight_current();
                 if let Ok(mut mg) = m.lock() {
-                    if let Some(brightness) = read_display_brightness() {
-                        mg.display.brightness_pct = brightness * 100.0;
-                        mg.display.estimated_power_w = brightness * MAX_DISPLAY_W;
-                        mg.display.nits = brightness * max_nits;
+                    if let Some(br) = brightness {
+                        mg.display.brightness_pct = br * 100.0;
+                        mg.display.nits = br * max_nits;
+                        mg.display.max_nits = max_nits;
                         mg.display.available = true;
+                        mg.display.estimated_power_w =
+                            if let Some((cur_ua, max_ua)) = backlight_current {
+                                let frac = cur_ua as f32 / max_ua as f32;
+                                let real_ma = frac * cal_max_ma;
+                                real_ma / 1000.0 * BACKLIGHT_VOLTAGE_V
+                            } else {
+                                br * MAX_DISPLAY_W
+                            };
                     } else {
                         mg.display.brightness_pct = 0.0;
                         mg.display.estimated_power_w = 0.0;

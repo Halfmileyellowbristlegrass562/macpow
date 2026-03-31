@@ -98,7 +98,9 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 +------------------+---------------------------------------------+
 | IOReport         | SoC power (Energy Model),                   |
 |                  | CPU/GPU frequencies (DVFS residency)        |
-| SMC              | System power (PSTR), temps, fans            |
+| SMC              | System power (PSTR), display backlight     |
+|                  | (PDBR), adapter (PDTR), WiFi (wiPm),      |
+|                  | temps, fans                                |
 | IORegistry       | Battery, display brightness, keyboard PWM,  |
 |                  | USB devices, SSD model, disk I/O counters   |
 | CoreAudio        | Volume level, mute state                    |
@@ -118,7 +120,9 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | Media Engine, Camera (ISP) | IOReport | Direct energy measurement (AVE + MSR, ISP) |
 | Fabric (AMCC, DCS, FAB, AFR) | IOReport | Direct energy measurement |
 | Thunderbolt/PCIe | IOReport | Direct energy measurement (PCIe ports + controllers) |
-| Display | DisplayServices + IOReport | Brightness * 5W + SoC controller (DISP) + external (DISPEXT) |
+| Display backlight | SMC PDBR | Direct power rail measurement |
+| Display controller | IOReport DISP/DISPEXT | Direct energy measurement (SoC + external) |
+| Power adapter | SMC PDTR | Direct power delivery measurement |
 | System total | SMC PSTR | Direct power rail measurement |
 | Battery | IORegistry | V * I calculation |
 | Per-process | Kernel | `ri_billed_energy` from rusage_info_v4 |
@@ -127,7 +131,7 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | Keyboard | IORegistry PWM | Duty cycle * 0.5W max |
 | Fans | SMC RPM | Cubic model: (RPM/RPM_max)^3 * 1W |
 | Audio | CoreAudio + IOPMAssertions | Idle 0.05W + volume^2 * 1W |
-| WiFi | CoreWLAN + ipconfig | RSSI-based model: 0.1-0.8W |
+| WiFi | SMC wiPm | Direct power measurement |
 | Bluetooth | pmset | Fixed per device type (0.01-0.05W) |
 | SSD | IORegistry counters | I/O utilization: 0.03-2.5W |
 | Network | getifaddrs | Byte counters (no power model, data only) |

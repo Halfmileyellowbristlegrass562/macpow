@@ -36,7 +36,7 @@ fn power_color(w: f32) -> Color {
         w if w < 1.0 => Color::Rgb(46, 139, 87),
         w if w < 5.0 => Color::Rgb(220, 180, 0), // golden yellow
         w if w < 10.0 => Color::Rgb(255, 140, 0), // carrot orange
-        _ => Color::Rgb(255, 50, 50),             // bright red
+        _ => Color::Rgb(255, 50, 50),            // bright red
     }
 }
 
@@ -113,21 +113,25 @@ impl TreeRow {
         style: Style,
         pinned: bool,
     ) -> Self {
-        let w = watts + 0.0; // normalize -0.0 to 0.0
-        Self {
-            prefix: prefix.to_string(),
-            label: label.to_string(),
-            freq: String::new(),
-            temp: String::new(),
-            current: format!("{:>7.3} W", w),
-            total: fmt_wh(wh),
-            label_style: style.fg(style.fg.unwrap_or(power_color(w.abs()))),
-            current_style: Style::default().fg(power_color(w.abs())),
-            key: Some(key),
-            parent,
-            is_header: false,
-            pinned,
-        }
+        Self::pw_inner(
+            key, parent, prefix, label, watts, wh, "", "", style, pinned, false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pw_est(
+        key: &'static str,
+        parent: Option<&'static str>,
+        prefix: &str,
+        label: &str,
+        watts: f32,
+        wh: f64,
+        style: Style,
+        pinned: bool,
+    ) -> Self {
+        Self::pw_inner(
+            key, parent, prefix, label, watts, wh, "", "", style, pinned, true,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -143,14 +147,62 @@ impl TreeRow {
         style: Style,
         pinned: bool,
     ) -> Self {
+        Self::pw_inner(
+            key, parent, prefix, label, watts, wh, freq, temp, style, pinned, false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pw_full_est(
+        key: &'static str,
+        parent: Option<&'static str>,
+        prefix: &str,
+        label: &str,
+        watts: f32,
+        wh: f64,
+        freq: &str,
+        temp: &str,
+        style: Style,
+        pinned: bool,
+    ) -> Self {
+        Self::pw_inner(
+            key, parent, prefix, label, watts, wh, freq, temp, style, pinned, true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pw_inner(
+        key: &'static str,
+        parent: Option<&'static str>,
+        prefix: &str,
+        label: &str,
+        watts: f32,
+        wh: f64,
+        freq: &str,
+        temp: &str,
+        style: Style,
+        pinned: bool,
+        estimated: bool,
+    ) -> Self {
         let w = watts + 0.0;
+        let current = if estimated {
+            format!("≈{:.3} W", w)
+        } else {
+            format!("{:>7.3} W", w)
+        };
+        let total = if estimated {
+            let s = fmt_wh(wh);
+            format!("≈{}", s.trim_start())
+        } else {
+            fmt_wh(wh)
+        };
         Self {
             prefix: prefix.to_string(),
             label: label.to_string(),
             freq: freq.to_string(),
             temp: temp.to_string(),
-            current: format!("{:>7.3} W", w),
-            total: fmt_wh(wh),
+            current,
+            total,
             label_style: style.fg(style.fg.unwrap_or(power_color(w.abs()))),
             current_style: Style::default().fg(power_color(w.abs())),
             key: Some(key),
@@ -250,6 +302,7 @@ struct Wh {
     fabric: f64,
     ssd: f64,
     display: f64,
+    backlight: f64,
     keyboard: f64,
     audio: f64,
     fans: f64,
@@ -257,6 +310,7 @@ struct Wh {
     bluetooth: f64,
     sys: f64,
     battery: f64,
+    adapter: f64,
     net_down_bytes: f64,
     net_up_bytes: f64,
     disk_read_bytes: f64,
@@ -293,6 +347,7 @@ sma_fields!(
     fabric,
     ssd,
     display,
+    backlight,
     keyboard,
     audio,
     fan_total,
@@ -300,6 +355,7 @@ sma_fields!(
     bluetooth,
     sys,
     battery,
+    adapter,
     net_down,
     net_up,
     ecpu_freq,
@@ -326,14 +382,40 @@ impl MetricsSma {
         self.fabric.push(m.soc.fabric_w);
         self.ssd.push(m.ssd_power_w);
         self.display.push(m.display.estimated_power_w);
+        self.backlight.push(if m.backlight_power_w > 0.0 {
+            m.backlight_power_w
+        } else {
+            m.display.estimated_power_w
+        });
         self.keyboard.push(m.keyboard.estimated_power_w);
         self.audio.push(m.audio.estimated_power_w);
         self.fan_total
             .push(m.fans.iter().map(|f| f.estimated_power_w).sum());
-        self.wifi.push(m.wifi.estimated_power_w);
+        self.wifi.push(if m.wifi_power_w > 0.0 {
+            m.wifi_power_w
+        } else {
+            m.wifi.estimated_power_w
+        });
         self.bluetooth.push(m.bluetooth_power_w);
         self.sys.push(m.sys_power_w);
         self.battery.push(m.battery.drain_w as f32);
+        let adapter_draw = if m.adapter.connected {
+            self.soc_total.get()
+                + self.ssd.get()
+                + self.display.get()
+                + self.display_soc.get()
+                + self.display_ext.get()
+                + self.keyboard.get()
+                + self.audio.get()
+                + self.fan_total.get()
+                + self.wifi.get()
+                + self.bluetooth.get()
+                + self.pcie.get()
+                + (m.battery.drain_w as f32).abs()
+        } else {
+            0.0
+        };
+        self.adapter.push(adapter_draw);
         self.net_down.push(m.network.bytes_in_per_sec as f32);
         self.net_up.push(m.network.bytes_out_per_sec as f32);
         self.ecpu_freq.push(m.soc.ecpu_freq_mhz as f32);
@@ -466,6 +548,11 @@ impl App {
             self.wh.fabric += m.soc.fabric_w as f64 * dt_h;
             self.wh.ssd += m.ssd_power_w as f64 * dt_h;
             self.wh.display += m.display.estimated_power_w as f64 * dt_h;
+            self.wh.backlight += if m.backlight_power_w > 0.0 {
+                m.backlight_power_w as f64 * dt_h
+            } else {
+                m.display.estimated_power_w as f64 * dt_h
+            };
             self.wh.keyboard += m.keyboard.estimated_power_w as f64 * dt_h;
             self.wh.audio += m.audio.estimated_power_w as f64 * dt_h;
             self.wh.fans += m
@@ -495,10 +582,22 @@ impl App {
                 }
                 self.usb_prev_bytes[i] = (d.bytes_read, d.bytes_written);
             }
-            self.wh.wifi += m.wifi.estimated_power_w as f64 * dt_h;
+            self.wh.wifi += if m.wifi_power_w > 0.0 {
+                m.wifi_power_w as f64 * dt_h
+            } else {
+                m.wifi.estimated_power_w as f64 * dt_h
+            };
             self.wh.bluetooth += m.bluetooth_power_w as f64 * dt_h;
             self.wh.sys += m.sys_power_w as f64 * dt_h;
             self.wh.battery += m.battery.drain_w * dt_h;
+            if m.adapter.connected {
+                let adapter_w = if m.adapter_power_w > 0.0 {
+                    m.adapter_power_w as f64
+                } else {
+                    self.sma.adapter.get() as f64
+                };
+                self.wh.adapter += adapter_w * dt_h;
+            }
             self.wh.net_down_bytes += m.network.bytes_in_per_sec * dt_s;
             self.wh.net_up_bytes += m.network.bytes_out_per_sec * dt_s;
             self.wh.disk_read_bytes += m.disk.read_bytes_per_sec * dt_s;
@@ -539,6 +638,14 @@ impl App {
         self.push_history("fabric", m.soc.fabric_w as f64);
         self.push_history("ssd", m.ssd_power_w as f64);
         self.push_history("display", m.display.estimated_power_w as f64);
+        self.push_history(
+            "backlight",
+            if m.backlight_power_w > 0.0 {
+                m.backlight_power_w as f64
+            } else {
+                m.display.estimated_power_w as f64
+            },
+        );
         self.push_history("keyboard", m.keyboard.estimated_power_w as f64);
         self.push_history("audio", m.audio.estimated_power_w as f64);
         self.push_history(
@@ -551,7 +658,14 @@ impl App {
         for (i, d) in m.usb_devices.iter().enumerate() {
             self.push_history(usb_key(i), d.power_ma.unwrap_or(0) as f64 * 5.0 / 1000.0);
         }
-        self.push_history("wifi", m.wifi.estimated_power_w as f64);
+        self.push_history(
+            "wifi",
+            if m.wifi_power_w > 0.0 {
+                m.wifi_power_w as f64
+            } else {
+                m.wifi.estimated_power_w as f64
+            },
+        );
         self.push_history("bluetooth", m.bluetooth_power_w as f64);
         self.push_history("net_down", m.network.bytes_in_per_sec);
         self.push_history("net_up", m.network.bytes_out_per_sec);
@@ -563,6 +677,14 @@ impl App {
         );
         self.push_history("system", m.sys_power_w as f64);
         self.push_history("battery", m.battery.drain_w.abs());
+        self.push_history(
+            "adapter",
+            if m.adapter_power_w > 0.0 {
+                m.adapter_power_w as f64
+            } else {
+                self.sma.adapter.get() as f64
+            },
+        );
         self.push_history("software", m.all_procs_power_w as f64);
         for p in &m.top_processes {
             let key = proc_key(&mut self.proc_keys, p.pid);
@@ -924,6 +1046,49 @@ impl App {
 
         rows.push(TreeRow::separator());
 
+        // ── Power Adapter (first row of the battery section)
+        if m.adapter.connected {
+            let has_pdtr = m.adapter_power_w > 0.0;
+            let adapter_w = if has_pdtr {
+                m.adapter_power_w
+            } else {
+                s.adapter.get()
+            };
+            let adapter_label = if m.adapter.is_wireless {
+                format!("Power Adapter {}W (wireless)", m.adapter.watts)
+            } else {
+                format!(
+                    "Power Adapter {}W ({:.1}V × {:.1}A)",
+                    m.adapter.watts,
+                    m.adapter.voltage_mv as f64 / 1000.0,
+                    m.adapter.current_ma as f64 / 1000.0
+                )
+            };
+            if has_pdtr {
+                rows.push(TreeRow::pw(
+                    "adapter",
+                    None,
+                    "",
+                    &adapter_label,
+                    adapter_w,
+                    w.adapter,
+                    Style::default().fg(Color::Rgb(46, 139, 87)),
+                    pin("adapter"),
+                ));
+            } else {
+                rows.push(TreeRow::pw_est(
+                    "adapter",
+                    None,
+                    "",
+                    &adapter_label,
+                    adapter_w,
+                    w.adapter,
+                    Style::default().fg(Color::Rgb(46, 139, 87)),
+                    pin("adapter"),
+                ));
+            }
+        }
+
         // ── Battery (standalone row before the tree)
         if m.battery.present {
             let batt_w = s.battery.get();
@@ -956,7 +1121,25 @@ impl App {
                     Style::default().fg(power_color(batt_w.abs())),
                 )
             };
-            let batt_label = format!("Battery {:.0}% ({})", m.battery.percent, charge_status);
+            let health_str = if m.battery.health_pct > 0.0 && m.battery.health_pct < 100.0 {
+                format!(", health {:.0}%", m.battery.health_pct)
+            } else {
+                String::new()
+            };
+            let cycle_str = if m.battery.cycle_count > 0 {
+                format!(", {} cycles", m.battery.cycle_count)
+            } else {
+                String::new()
+            };
+            let capacity_str = if m.battery.capacity_wh > 0.0 {
+                format!(", {:.1} Wh", m.battery.capacity_wh)
+            } else {
+                String::new()
+            };
+            let batt_label = format!(
+                "Battery {:.0}% ({}{}{}{})",
+                m.battery.percent, charge_status, health_str, cycle_str, capacity_str,
+            );
             rows.push(TreeRow::pw_full(
                 "battery",
                 None,
@@ -971,11 +1154,44 @@ impl App {
             ));
         }
 
+        // ── BT devices with batteries (in the battery section)
+        for d in &m.bluetooth_devices {
+            if d.batteries.is_empty() {
+                continue;
+            }
+            let bat = d
+                .batteries
+                .iter()
+                .map(|(l, p)| {
+                    if l.is_empty() {
+                        p.clone()
+                    } else {
+                        format!("{}: {}", l, p)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            rows.push(TreeRow::info(
+                None,
+                "",
+                &format!("{} {} [{}]", d.name, d.minor_type, bat),
+                "",
+                "",
+                DIM,
+            ));
+        }
+
         rows.push(TreeRow::separator());
 
         // ── Root: machine name with system total (sum of visible children)
-        let display_w = s.display.get() + s.display_soc.get() + s.display_ext.get();
-        let display_wh = w.display + w.display_soc + w.display_ext;
+        let has_pdbr = m.backlight_power_w > 0.0;
+        let bl_w = if has_pdbr {
+            s.backlight.get()
+        } else {
+            s.display.get()
+        };
+        let display_w = bl_w + s.display_soc.get() + s.display_ext.get();
+        let display_wh = w.backlight + w.display_soc + w.display_ext;
         let sys_w = s.soc_total.get()
             + s.ssd.get()
             + display_w
@@ -1329,7 +1545,7 @@ impl App {
         }
 
         // ── SSD
-        rows.push(TreeRow::pw_full(
+        rows.push(TreeRow::pw_full_est(
             "ssd",
             Some("system"),
             &t("ssd"),
@@ -1370,15 +1586,21 @@ impl App {
             rows.push(r);
         }
 
-        // ── Display (brightness estimate for built-in + IOReport DISPEXT for external)
+        // ── Display (backlight from SMC PDBR + IOReport DISP/DISPEXT)
         {
-            let disp_w = s.display.get() + s.display_soc.get() + s.display_ext.get();
-            let disp_wh = w.display + w.display_soc + w.display_ext;
+            let has_pdbr = m.backlight_power_w > 0.0;
+            let bl_w = if has_pdbr {
+                s.backlight.get()
+            } else {
+                s.display.get()
+            };
+            let disp_w = bl_w + s.display_soc.get() + s.display_ext.get();
+            let disp_wh = w.backlight + w.display_soc + w.display_ext;
             let name = if m.display.available {
                 if m.display.nits > 0.0 {
                     format!(
-                        "Display ({:.0}% brightness, {:.0} nits)",
-                        m.display.brightness_pct, m.display.nits
+                        "Display ({:.0}% brightness, {:.0}/{:.0} nits)",
+                        m.display.brightness_pct, m.display.nits, m.display.max_nits
                     )
                 } else if m.display.brightness_pct > 0.0 {
                     format!("Display ({:.0}% brightness)", m.display.brightness_pct)
@@ -1389,18 +1611,43 @@ impl App {
                 "Display (off)".into()
             };
             let style = if m.display.available { BOLD } else { DIM };
-            rows.push(TreeRow::pw(
-                "display",
-                Some("system"),
-                &t("display"),
-                &name,
-                disp_w,
-                disp_wh,
-                style,
-                pin("display"),
-            ));
-            if m.soc.display_ext_w > 0.0 || w.display_ext > 0.0 {
-                let dc = c("display");
+            let dc = c("display");
+            let has_ext = m.soc.display_ext_w > 0.0 || w.display_ext > 0.0;
+            if has_pdbr {
+                rows.push(TreeRow::pw(
+                    "display",
+                    Some("system"),
+                    &t("display"),
+                    &name,
+                    disp_w,
+                    disp_wh,
+                    style,
+                    pin("display"),
+                ));
+                let bl_last = if has_ext { "├─ " } else { "└─ " };
+                rows.push(TreeRow::pw(
+                    "backlight",
+                    Some("display"),
+                    &format!("{}{}", dc, bl_last),
+                    "Backlight",
+                    s.backlight.get(),
+                    w.backlight,
+                    Style::default(),
+                    pin("backlight"),
+                ));
+            } else {
+                rows.push(TreeRow::pw_est(
+                    "display",
+                    Some("system"),
+                    &t("display"),
+                    &name,
+                    disp_w,
+                    disp_wh,
+                    style,
+                    pin("display"),
+                ));
+            }
+            if has_ext {
                 rows.push(TreeRow::pw(
                     "display_ext",
                     Some("display"),
@@ -1415,7 +1662,7 @@ impl App {
         }
 
         // ── Keyboard (always show — 0% brightness is valid, not pending)
-        rows.push(TreeRow::pw(
+        rows.push(TreeRow::pw_est(
             "keyboard",
             Some("system"),
             &t("keyboard"),
@@ -1437,7 +1684,7 @@ impl App {
             (_, true, None) => "playing".into(),
             (_, false, _) => "idle".into(),
         };
-        rows.push(TreeRow::pw(
+        rows.push(TreeRow::pw_est(
             "audio",
             Some("system"),
             &t("audio"),
@@ -1451,7 +1698,7 @@ impl App {
         // ── Fans
         let fc = c("fans");
         if m.fans.is_empty() {
-            rows.push(TreeRow::pw(
+            rows.push(TreeRow::pw_est(
                 "fans",
                 Some("system"),
                 &t("fans"),
@@ -1462,7 +1709,7 @@ impl App {
                 pin("fans"),
             ));
         } else {
-            rows.push(TreeRow::pw(
+            rows.push(TreeRow::pw_est(
                 "fans",
                 Some("system"),
                 &t("fans"),
@@ -1479,7 +1726,7 @@ impl App {
                     format!("{}├─ ", fc)
                 };
                 let fan_wh_val = self.fan_wh.get(i).copied().unwrap_or(0.0);
-                TreeRow::pw(
+                TreeRow::pw_est(
                     fan_key(i),
                     Some("fans"),
                     &pfx,
@@ -1503,7 +1750,7 @@ impl App {
             .map(|d| d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0)
             .sum();
         let usb_total_wh: f64 = self.usb_wh.iter().sum();
-        rows.push(TreeRow::pw(
+        rows.push(TreeRow::pw_est(
             "peripherals",
             Some("system"),
             &t("peripherals"),
@@ -1540,16 +1787,30 @@ impl App {
             (false, true) => ("WiFi (scanning…)".into(), PENDING),
             (false, false) => ("WiFi (off)".into(), Style::default()),
         };
-        rows.push(TreeRow::pw(
-            "wifi",
-            Some("peripherals"),
-            &format!("{}├─ ", pc),
-            &wifi_name,
-            s.wifi.get(),
-            w.wifi,
-            wifi_style,
-            pin("wifi"),
-        ));
+        let has_wipm = m.wifi_power_w > 0.0;
+        if has_wipm {
+            rows.push(TreeRow::pw(
+                "wifi",
+                Some("peripherals"),
+                &format!("{}├─ ", pc),
+                &wifi_name,
+                s.wifi.get(),
+                w.wifi,
+                wifi_style,
+                pin("wifi"),
+            ));
+        } else {
+            rows.push(TreeRow::pw_est(
+                "wifi",
+                Some("peripherals"),
+                &format!("{}├─ ", pc),
+                &wifi_name,
+                s.wifi.get(),
+                w.wifi,
+                wifi_style,
+                pin("wifi"),
+            ));
+        }
 
         let has_traffic =
             s.net_down.get() > 0.0 || s.net_up.get() > 0.0 || self.wh.net_down_bytes > 0.0;
@@ -1581,7 +1842,7 @@ impl App {
         } else {
             "Bluetooth".into()
         };
-        rows.push(TreeRow::pw(
+        rows.push(TreeRow::pw_est(
             "bluetooth",
             Some("peripherals"),
             &format!("{}├─ ", pc),
@@ -1634,7 +1895,7 @@ impl App {
                 DIM,
             ));
         } else {
-            rows.push(TreeRow::pw(
+            rows.push(TreeRow::pw_est(
                 "usb",
                 Some("peripherals"),
                 &format!("{}└─ ", pc),
@@ -1668,7 +1929,7 @@ impl App {
                     _ => "?",
                 };
                 let pwr_str = d.power_ma.map(|p| format!(", {}mA", p)).unwrap_or_default();
-                rows.push(TreeRow::pw(
+                rows.push(TreeRow::pw_est(
                     key,
                     Some("usb"),
                     &pfx,

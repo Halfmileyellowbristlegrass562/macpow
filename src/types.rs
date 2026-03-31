@@ -21,6 +21,7 @@ pub struct CliArgs {
 pub struct Metrics {
     pub soc: SocPower,
     pub battery: BatteryInfo,
+    pub adapter: AdapterInfo,
     pub display: DisplayInfo,
     pub keyboard: KeyboardInfo,
     pub audio: AudioInfo,
@@ -38,6 +39,9 @@ pub struct Metrics {
     pub fans: Vec<FanInfo>,
     pub temperatures: Vec<TempSensor>,
     pub sys_power_w: f32,
+    pub backlight_power_w: f32,
+    pub adapter_power_w: f32,
+    pub wifi_power_w: f32,
     pub gpu_cores: u32,
     pub dram_gb: u32,
     pub mem_used_gb: f32,
@@ -120,12 +124,27 @@ pub struct BatteryInfo {
     pub percent: f64,
     pub time_remaining_min: i64,
     pub external_connected: bool,
+    pub temperature_c: f64,
+    pub cycle_count: i64,
+    pub design_capacity_mah: f64,
+    pub max_capacity_mah: f64,
+    pub health_pct: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AdapterInfo {
+    pub connected: bool,
+    pub watts: u32,
+    pub voltage_mv: u32,
+    pub current_ma: u32,
+    pub is_wireless: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DisplayInfo {
     pub brightness_pct: f32,
     pub nits: f32,
+    pub max_nits: f32,
     pub estimated_power_w: f32,
     pub available: bool,
 }
