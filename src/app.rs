@@ -236,29 +236,6 @@ impl TreeRow {
         }
     }
 
-    fn header(
-        parent: Option<&'static str>,
-        prefix: &str,
-        label: &str,
-        col3: &str,
-        col4: &str,
-    ) -> Self {
-        Self {
-            prefix: prefix.to_string(),
-            label: label.to_string(),
-            freq: String::new(),
-            temp: String::new(),
-            current: col3.to_string(),
-            total: col4.to_string(),
-            label_style: BOLD,
-            current_style: BOLD,
-            key: None,
-            parent,
-            is_header: true,
-            pinned: false,
-        }
-    }
-
     fn has_children_in(&self, rows: &[TreeRow]) -> bool {
         self.key
             .map(|k| rows.iter().any(|r| r.parent == Some(k)))
@@ -511,7 +488,7 @@ impl App {
                 "usb7",
             ]
             .into_iter()
-            .chain(["ethernet", "ssd_nand"].into_iter())
+            .chain(["ethernet", "ssd_nand", "trackpad"].into_iter())
             .collect(),
             total_rows: 0,
             row_keys_cache: Vec::new(),
@@ -1033,15 +1010,7 @@ impl App {
 
         let mut rows: Vec<TreeRow> = Vec::new();
 
-        let inline_cats_list = ["CPU", "GPU", "Memory", "SSD", "Battery", "ANE"];
-        let has_remaining_temps = temp_groups
-            .keys()
-            .any(|k| !inline_cats_list.contains(&k.as_str()));
-        let last_section = if has_remaining_temps {
-            "temps"
-        } else {
-            "peripherals"
-        };
+        let last_section = { "peripherals" };
         let t = |section: &str| -> String {
             if section == last_section {
                 "└─ ".into()
@@ -1666,9 +1635,10 @@ impl App {
             };
             let style = if m.display.available { BOLD } else { DIM };
             let dc = c("display");
+            let disp_temp = temp_info("Display");
             let has_ext = m.soc.display_ext_w > 0.0 || w.display_ext > 0.0;
             if has_pdbr {
-                rows.push(TreeRow::pw(
+                let mut r = TreeRow::pw(
                     "display",
                     Some("system"),
                     &t("display"),
@@ -1677,7 +1647,9 @@ impl App {
                     disp_wh,
                     style,
                     pin("display"),
-                ));
+                );
+                r.temp = disp_temp;
+                rows.push(r);
                 let bl_last = if has_ext { "├─ " } else { "└─ " };
                 rows.push(TreeRow::pw(
                     "backlight",
@@ -1690,7 +1662,7 @@ impl App {
                     pin("backlight"),
                 ));
             } else {
-                rows.push(TreeRow::pw_est(
+                let mut r = TreeRow::pw_est(
                     "display",
                     Some("system"),
                     &t("display"),
@@ -1699,7 +1671,9 @@ impl App {
                     disp_wh,
                     style,
                     pin("display"),
-                ));
+                );
+                r.temp = disp_temp;
+                rows.push(r);
             }
             if has_ext {
                 rows.push(TreeRow::pw(
@@ -1726,6 +1700,57 @@ impl App {
             BOLD,
             pin("keyboard"),
         ));
+
+        // ── Trackpad (temperature only, power included in SoC)
+        {
+            let tp_temps: Vec<&TempSensor> = m
+                .temperatures
+                .iter()
+                .filter(|t| t.category == "Trackpad")
+                .collect();
+            if !tp_temps.is_empty() {
+                let all_vals: Vec<f32> = tp_temps.iter().map(|t| t.value_celsius).collect();
+                let tp_temp = fmt_temps(&all_vals);
+                let mut r = TreeRow::info(
+                    Some("system"),
+                    &t("trackpad"),
+                    "Trackpad",
+                    "",
+                    "",
+                    Style::default().fg(Color::Green),
+                );
+                r.temp = tp_temp;
+                r.key = Some("trackpad");
+                rows.push(r);
+                let tc = c("trackpad");
+                let module = tp_temps.iter().find(|t| t.key == "TPMP");
+                let surface = tp_temps.iter().find(|t| t.key == "TPSP");
+                if let Some(m_temp) = module {
+                    let mut r = TreeRow::info(
+                        Some("trackpad"),
+                        &format!("{}├─ ", tc),
+                        "Module",
+                        "",
+                        "",
+                        Style::default().fg(Color::Green),
+                    );
+                    r.temp = format!("{:.0}°C", m_temp.value_celsius);
+                    rows.push(r);
+                }
+                if let Some(s_temp) = surface {
+                    let mut r = TreeRow::info(
+                        Some("trackpad"),
+                        &format!("{}└─ ", tc),
+                        "Surface",
+                        "",
+                        "",
+                        Style::default().fg(Color::Green),
+                    );
+                    r.temp = format!("{:.0}°C", s_temp.value_celsius);
+                    rows.push(r);
+                }
+            }
+        }
 
         // ── Audio
         let audio_status = match (m.audio.device_active, m.audio.playing, m.audio.volume_pct) {
@@ -2126,48 +2151,6 @@ impl App {
                     ));
                 }
             }
-        }
-
-        // ── Temperatures (part of the tree, before Software)
-        let inline_cats = ["CPU", "GPU", "Memory", "SSD", "Battery", "ANE"];
-        let remaining: Vec<_> = temp_groups
-            .iter()
-            .filter(|(k, _)| !inline_cats.contains(&k.as_str()))
-            .collect();
-        if !remaining.is_empty() {
-            let tc = c("temps");
-            rows.push(TreeRow::header(
-                Some("system"),
-                &t("temps"),
-                "Temperatures",
-                "",
-                "Now (min–max)",
-            ));
-            rows.extend(remaining.iter().enumerate().map(|(i, (cat, vals))| {
-                let pfx = if i == remaining.len() - 1 {
-                    format!("{}└─ ", tc)
-                } else {
-                    format!("{}├─ ", tc)
-                };
-                let avg = vals.iter().sum::<f32>() / vals.len() as f32;
-                let hmin = self.temp_min.get(*cat).copied().unwrap_or(avg);
-                let hmax = self.temp_max.get(*cat).copied().unwrap_or(avg);
-                let color = match avg {
-                    a if a > 90.0 => Color::Red,
-                    a if a > 70.0 => Color::Yellow,
-                    _ => Color::Reset,
-                };
-                let mut r = TreeRow::info(
-                    Some("temps"),
-                    &pfx,
-                    &format!("{} ({})", cat, vals.len()),
-                    "",
-                    &format!("{:.0}°C ({:.0}–{:.0})", avg, hmin, hmax),
-                    Style::default().fg(color),
-                );
-                r.current_style = Style::default().fg(color);
-                r
-            }));
         }
 
         // ── Software (standalone collapsible section after the tree)

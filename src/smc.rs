@@ -297,7 +297,11 @@ impl SmcConnection {
     }
 
     fn discover_temp_keys(&mut self) -> Vec<(String, String)> {
+        // Longer prefixes first: TPMP/TPSP must match before Tp (CPU)
         let prefixes: &[(&str, &str)] = &[
+            ("TPMP", "Trackpad"),
+            ("TPSP", "Trackpad"),
+            ("TD", "Display"),
             ("Tp", "CPU"),
             ("Te", "CPU"),
             ("Tg", "GPU"),
