@@ -959,28 +959,17 @@ impl App {
     }
 
     fn chart_keys(&self, cursor_key: Option<&'static str>) -> Vec<&'static str> {
-        // Collect all chart keys: cursor + pinned, ordered by tree position
-        let mut entries: Vec<(usize, &'static str)> = Vec::new();
+        let mut keys: Vec<&'static str> = Vec::new();
         if let Some(ck) = cursor_key {
             if !self.pinned.contains(&ck) {
-                let pos = self
-                    .row_keys_cache
-                    .iter()
-                    .position(|k| *k == Some(ck))
-                    .unwrap_or(0);
-                entries.push((pos, ck));
+                keys.push(ck);
             }
         }
-        for &pk in &self.pinned {
-            let pos = self
-                .row_keys_cache
-                .iter()
-                .position(|k| *k == Some(pk))
-                .unwrap_or(usize::MAX);
-            entries.push((pos, pk));
+        // Pinned in reverse order: last pinned on top, first pinned at bottom
+        for &pk in self.pinned.iter().rev() {
+            keys.push(pk);
         }
-        entries.sort_by_key(|(pos, _)| *pos);
-        entries.into_iter().map(|(_, k)| k).collect()
+        keys
     }
 
     // ── Build rows ──────────────────────────────────────────────────────────
