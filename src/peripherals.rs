@@ -50,7 +50,8 @@ unsafe fn list_usb_inner() -> Option<Vec<UsbDevice>> {
             let dict = props as CFDictionaryRef;
             vendor_id = cf_utils::cfdict_get_i64(dict, "idVendor").unwrap_or(0) as u32;
             product_id = cf_utils::cfdict_get_i64(dict, "idProduct").unwrap_or(0) as u32;
-            power_ma = cf_utils::cfdict_get_i64(dict, "USB Power")
+            power_ma = cf_utils::cfdict_get_i64(dict, "UsbPowerSinkAllocation")
+                .or_else(|| cf_utils::cfdict_get_i64(dict, "USB Power"))
                 .or_else(|| cf_utils::cfdict_get_i64(dict, "bMaxPower"))
                 .map(|v| v as u32);
             speed = cf_utils::cfdict_get_i64(dict, "Device Speed").unwrap_or(0) as u32;
