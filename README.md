@@ -1,4 +1,4 @@
-# macpow
+# 💻🔋 macpow – Real-time power tree TUI for Apple Silicon
 
 [![CI](https://github.com/k06a/macpow/actions/workflows/ci.yml/badge.svg)](https://github.com/k06a/macpow/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/macpow)](https://crates.io/crates/macpow)
@@ -105,7 +105,7 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | Mach API         | Per-CPU utilization ticks, memory stats      |
 | proc_pid_rusage  | Per-process billed energy                   |
 | getifaddrs       | Network traffic byte counters               |
-| system_profiler  | WiFi info, Bluetooth devices                |
+| CoreWLAN/pmset   | WiFi info, Bluetooth devices                |
 | IOPMAssertions   | Power assertions, audio playback detection  |
 +------------------+---------------------------------------------+
 ```
@@ -127,8 +127,8 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | Keyboard | IORegistry PWM | Duty cycle * 0.5W max |
 | Fans | SMC RPM | Cubic model: (RPM/RPM_max)^3 * 1W |
 | Audio | CoreAudio + IOPMAssertions | Idle 0.05W + volume^2 * 1W |
-| WiFi | system_profiler | RSSI-based model: 0.1-0.8W |
-| Bluetooth | system_profiler | Fixed per device type (0.01-0.05W) |
+| WiFi | CoreWLAN + ipconfig | RSSI-based model: 0.1-0.8W |
+| Bluetooth | pmset | Fixed per device type (0.01-0.05W) |
 | SSD | IORegistry counters | I/O utilization: 0.03-2.5W |
 | Network | getifaddrs | Byte counters (no power model, data only) |
 | USB | IORegistry | bMaxPower * 5V |
