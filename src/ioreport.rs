@@ -609,8 +609,10 @@ impl IOReportSampler {
                     let state_count = IOReportStateGetCount(ch);
                     let (die, base_name) = strip_die_prefix(&name);
                     let die_offset = die * CLUSTERS_PER_DIE;
-                    let stats_key = parse_cpu_stats_core_key(base_name)
-                        .map(|mut k| { k.cluster += die_offset; k });
+                    let stats_key = parse_cpu_stats_core_key(base_name).map(|mut k| {
+                        k.cluster += die_offset;
+                        k
+                    });
                     if let Some(key) = stats_key {
                         if seen_stats_keys.insert(key) {
                             match key.kind {
@@ -745,8 +747,7 @@ impl IOReportSampler {
                                     pcpu_power.insert(key, (name.clone(), watts));
                                 }
                             }
-                        } else if let Some((kind, cluster)) =
-                            parse_energy_cluster_total(base_name)
+                        } else if let Some((kind, cluster)) = parse_energy_cluster_total(base_name)
                         {
                             let cluster = cluster + die_offset;
                             match kind {

@@ -73,11 +73,32 @@ pub fn read_net_counters() -> NetCounters {
 
 /// Compute network rates from two counter snapshots.
 pub fn compute_net_rates(prev: &NetCounters, cur: &NetCounters, dt_s: f64) -> NetworkInfo {
+    compute_net_rates_for(prev, cur, dt_s, |_| true)
+}
+
+/// Compute network rates for a single interface.
+pub fn compute_net_rates_iface(
+    prev: &NetCounters,
+    cur: &NetCounters,
+    dt_s: f64,
+    iface: &str,
+) -> NetworkInfo {
+    let name = iface.to_string();
+    compute_net_rates_for(prev, cur, dt_s, |n| n == &name)
+}
+
+fn compute_net_rates_for(
+    prev: &NetCounters,
+    cur: &NetCounters,
+    dt_s: f64,
+    filter: impl Fn(&String) -> bool,
+) -> NetworkInfo {
     if dt_s <= 0.0 || prev.is_empty() {
         return NetworkInfo::default();
     }
     let (total_in, total_out) = cur
         .iter()
+        .filter(|(iface, _)| filter(iface))
         .filter_map(|(iface, &(ci, co))| {
             prev.get(iface)
                 .map(|&(pi, po)| (ci.saturating_sub(pi), co.saturating_sub(po)))

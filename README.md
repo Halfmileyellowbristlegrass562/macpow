@@ -25,7 +25,7 @@ Real-time power consumption monitor for Apple Silicon Macs (M1–M5+).
 - **Keyboard** — backlight brightness and estimated power via IORegistry PWM
 - **Battery** — voltage, amperage, charge %, time remaining, temperature, drain/charge rate
 - **SSD** — model, interconnect (Apple Fabric/PCIe), power estimation from IORegistry disk counters
-- **Peripherals** — Thunderbolt/PCIe (IOReport measured), WiFi (signal/mode/channel), Bluetooth devices with battery levels, USB devices (speed/power/I/O counters)
+- **Peripherals** — Thunderbolt/PCIe (IOReport measured), Ethernet (link speed, per-interface traffic), WiFi (signal/mode/channel, per-interface traffic), Bluetooth devices with battery levels, USB devices (speed/power/I/O counters)
 - **Per-process energy** — dynamically-sized top processes by session energy (from `proc_pid_rusage`), dead process detection
 - **Fans** — RPM and cubic power model per fan
 - **Collapsible tree** — fold/unfold with arrows, `+`/`-` for all
@@ -134,7 +134,8 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | WiFi | SMC wiPm | Direct power measurement |
 | Bluetooth | pmset | Fixed per device type (0.01-0.05W) |
 | SSD | IORegistry counters | I/O utilization: 0.03-2.5W |
-| Network | getifaddrs | Byte counters (no power model, data only) |
+| Ethernet | getifaddrs | Link detection, speed, per-interface traffic (data only) |
+| Network | getifaddrs | Per-interface byte counters for Ethernet and WiFi |
 | USB | IORegistry PowerOutDetails | Per-port power measurement (Watts/PDPowermW) |
 
 ### IOReport channel naming (multi-die support)

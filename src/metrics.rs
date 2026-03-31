@@ -1013,8 +1013,40 @@ impl Sampler {
                     if let Some((prev_time, ref prev_counters)) = prev {
                         let dt_s = prev_time.elapsed().as_secs_f64();
                         let net = powermetrics::compute_net_rates(prev_counters, &cur, dt_s);
+                        // Read interface names from shared state (set by WiFi+Ethernet thread)
+                        let (eth_iface, wifi_iface) = m
+                            .lock()
+                            .map(|mg| {
+                                (
+                                    mg.ethernet.interface_name.clone(),
+                                    mg.wifi.interface_name.clone(),
+                                )
+                            })
+                            .unwrap_or_default();
+                        let eth_net = if !eth_iface.is_empty() {
+                            powermetrics::compute_net_rates_iface(
+                                prev_counters,
+                                &cur,
+                                dt_s,
+                                &eth_iface,
+                            )
+                        } else {
+                            Default::default()
+                        };
+                        let wifi_net = if !wifi_iface.is_empty() {
+                            powermetrics::compute_net_rates_iface(
+                                prev_counters,
+                                &cur,
+                                dt_s,
+                                &wifi_iface,
+                            )
+                        } else {
+                            Default::default()
+                        };
                         if let Ok(mut mg) = m.lock() {
                             mg.network = net;
+                            mg.eth_network = eth_net;
+                            mg.wifi_network = wifi_net;
                         }
                     }
                     prev = Some((Instant::now(), cur));
@@ -1059,7 +1091,7 @@ impl Sampler {
             let m = shared.clone();
             handles.push(std::thread::spawn(move || loop {
                 let wifi = peripherals::read_wifi_info();
-                let ethernet = peripherals::read_ethernet_info();
+                let ethernet = peripherals::read_ethernet_info(&wifi.interface_name);
                 if let Ok(mut mg) = m.lock() {
                     mg.wifi = wifi;
                     mg.ethernet = ethernet;

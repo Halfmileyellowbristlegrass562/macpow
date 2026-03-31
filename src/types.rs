@@ -30,7 +30,9 @@ pub struct Metrics {
     pub ssd_power_w: f32,
     pub usb_devices: Vec<UsbDevice>,
     pub ethernet: EthernetInfo,
+    pub eth_network: NetworkInfo,
     pub wifi: WifiInfo,
+    pub wifi_network: NetworkInfo,
     pub bluetooth_devices: Vec<BluetoothDevice>,
     pub bluetooth_power_w: f32,
     pub power_assertions: Vec<PowerAssertion>,
@@ -201,6 +203,7 @@ pub struct UsbDevice {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct WifiInfo {
     pub connected: bool,
+    pub interface_name: String,
     pub ssid: String,
     pub rssi_dbm: i32,
     pub noise_dbm: i32,

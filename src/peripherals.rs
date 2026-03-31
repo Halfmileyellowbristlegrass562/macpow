@@ -199,7 +199,7 @@ extern "C" {
 
 // ── Ethernet detection via getifaddrs ─────────────────────────────────────────
 
-pub fn read_ethernet_info() -> EthernetInfo {
+pub fn read_ethernet_info(wifi_iface: &str) -> EthernetInfo {
     #[repr(C)]
     struct IfData {
         ifi_type: u8,
@@ -231,6 +231,11 @@ pub fn read_ethernet_info() -> EthernetInfo {
             }
             let name = std::ffi::CStr::from_ptr(entry.ifa_name).to_string_lossy();
             if !name.starts_with("en") {
+                continue;
+            }
+            // WiFi interfaces also report IFT_ETHER at link layer; skip the
+            // known WiFi interface so we only detect real Ethernet ports.
+            if !wifi_iface.is_empty() && name == wifi_iface {
                 continue;
             }
             let data = &*(entry.ifa_data as *const IfData);
@@ -340,11 +345,15 @@ pub fn read_wifi_info() -> WifiInfo {
 
         let connected = !ssid.is_empty();
         if !connected {
-            return WifiInfo::default();
+            return WifiInfo {
+                interface_name: iface_name,
+                ..Default::default()
+            };
         }
 
         let mut info = WifiInfo {
             connected: true,
+            interface_name: iface_name,
             ssid,
             ..Default::default()
         };

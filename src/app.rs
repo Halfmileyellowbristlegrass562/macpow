@@ -313,6 +313,10 @@ struct Wh {
     adapter: f64,
     net_down_bytes: f64,
     net_up_bytes: f64,
+    eth_down_bytes: f64,
+    eth_up_bytes: f64,
+    wifi_down_bytes: f64,
+    wifi_up_bytes: f64,
     disk_read_bytes: f64,
     disk_write_bytes: f64,
 }
@@ -358,6 +362,10 @@ sma_fields!(
     adapter,
     net_down,
     net_up,
+    eth_down,
+    eth_up,
+    wifi_down,
+    wifi_up,
     ecpu_freq,
     pcpu_freq,
     gpu_freq
@@ -418,6 +426,10 @@ impl MetricsSma {
         self.adapter.push(adapter_draw);
         self.net_down.push(m.network.bytes_in_per_sec as f32);
         self.net_up.push(m.network.bytes_out_per_sec as f32);
+        self.eth_down.push(m.eth_network.bytes_in_per_sec as f32);
+        self.eth_up.push(m.eth_network.bytes_out_per_sec as f32);
+        self.wifi_down.push(m.wifi_network.bytes_in_per_sec as f32);
+        self.wifi_up.push(m.wifi_network.bytes_out_per_sec as f32);
         self.ecpu_freq.push(m.soc.ecpu_freq_mhz as f32);
         self.pcpu_freq.push(m.soc.pcpu_freq_mhz as f32);
         self.gpu_freq.push(m.soc.gpu_freq_mhz as f32);
@@ -499,6 +511,7 @@ impl App {
                 "usb7",
             ]
             .into_iter()
+            .chain(std::iter::once("ethernet"))
             .collect(),
             total_rows: 0,
             row_keys_cache: Vec::new(),
@@ -603,6 +616,10 @@ impl App {
             }
             self.wh.net_down_bytes += m.network.bytes_in_per_sec * dt_s;
             self.wh.net_up_bytes += m.network.bytes_out_per_sec * dt_s;
+            self.wh.eth_down_bytes += m.eth_network.bytes_in_per_sec * dt_s;
+            self.wh.eth_up_bytes += m.eth_network.bytes_out_per_sec * dt_s;
+            self.wh.wifi_down_bytes += m.wifi_network.bytes_in_per_sec * dt_s;
+            self.wh.wifi_up_bytes += m.wifi_network.bytes_out_per_sec * dt_s;
             self.wh.disk_read_bytes += m.disk.read_bytes_per_sec * dt_s;
             self.wh.disk_write_bytes += m.disk.write_bytes_per_sec * dt_s;
         }
@@ -670,8 +687,10 @@ impl App {
             },
         );
         self.push_history("bluetooth", m.bluetooth_power_w as f64);
-        self.push_history("net_down", m.network.bytes_in_per_sec);
-        self.push_history("net_up", m.network.bytes_out_per_sec);
+        self.push_history("eth_down", m.eth_network.bytes_in_per_sec);
+        self.push_history("eth_up", m.eth_network.bytes_out_per_sec);
+        self.push_history("wifi_down", m.wifi_network.bytes_in_per_sec);
+        self.push_history("wifi_up", m.wifi_network.bytes_out_per_sec);
         self.push_history("disk_read", m.disk.read_bytes_per_sec);
         self.push_history("disk_write", m.disk.write_bytes_per_sec);
         self.push_history(
@@ -1740,33 +1759,69 @@ impl App {
             pin("pcie"),
         ));
 
-        // Ethernet
+        // Ethernet (collapsible, collapsed by default)
         if m.ethernet.connected {
+            let eth_iface = if m.ethernet.interface_name.is_empty() {
+                String::new()
+            } else {
+                format!("{}, ", m.ethernet.interface_name)
+            };
             let eth_label = if m.ethernet.link_speed_mbps >= 1000 {
                 format!(
-                    "Ethernet ({} Gbps, {})",
+                    "Ethernet ({}{} Gbps)",
+                    eth_iface,
                     m.ethernet.link_speed_mbps / 1000,
-                    m.ethernet.interface_name
                 )
             } else if m.ethernet.link_speed_mbps > 0 {
                 format!(
-                    "Ethernet ({} Mbps, {})",
-                    m.ethernet.link_speed_mbps, m.ethernet.interface_name
+                    "Ethernet ({}{} Mbps)",
+                    eth_iface, m.ethernet.link_speed_mbps,
                 )
-            } else {
+            } else if !eth_iface.is_empty() {
                 format!("Ethernet ({})", m.ethernet.interface_name)
+            } else {
+                "Ethernet".into()
             };
-            rows.push(TreeRow::info(
-                Some("peripherals"),
-                &format!("{}├─ ", pc),
-                &eth_label,
-                "",
-                "",
-                Style::default(),
-            ));
+            rows.push({
+                let mut r = TreeRow::info(
+                    Some("peripherals"),
+                    &format!("{}├─ ", pc),
+                    &eth_label,
+                    "",
+                    "",
+                    Style::default().fg(Color::Green),
+                );
+                r.key = Some("ethernet");
+                r
+            });
+            let mut r = TreeRow::info(
+                Some("ethernet"),
+                &format!("{}│  ├─ ", pc),
+                "↓ Download",
+                &human_rate(s.eth_down.get() as f64),
+                &human_bytes(self.wh.eth_down_bytes),
+                DATA_STYLE,
+            );
+            r.key = Some("eth_down");
+            rows.push(r);
+            let mut r = TreeRow::info(
+                Some("ethernet"),
+                &format!("{}│  └─ ", pc),
+                "↑ Upload",
+                &human_rate(s.eth_up.get() as f64),
+                &human_bytes(self.wh.eth_up_bytes),
+                DATA_STYLE,
+            );
+            r.key = Some("eth_up");
+            rows.push(r);
         }
 
         // WiFi
+        let wifi_iface = if m.wifi.interface_name.is_empty() {
+            String::new()
+        } else {
+            format!("{}, ", m.wifi.interface_name)
+        };
         let (wifi_name, wifi_style) = match (m.wifi.connected, m.wifi.phy_mode.is_empty()) {
             (true, _) => {
                 let ch = if m.wifi.channel.is_empty() {
@@ -1775,12 +1830,33 @@ impl App {
                     format!(", ch{}", m.wifi.channel)
                 };
                 (
-                    format!("WiFi ({} dBm, {}{})", m.wifi.rssi_dbm, m.wifi.phy_mode, ch),
+                    format!(
+                        "WiFi ({}{} dBm, {}{})",
+                        wifi_iface, m.wifi.rssi_dbm, m.wifi.phy_mode, ch
+                    ),
                     Style::default(),
                 )
             }
-            (false, true) => ("WiFi (scanning…)".into(), PENDING),
-            (false, false) => ("WiFi (off)".into(), Style::default()),
+            (false, true) => {
+                if wifi_iface.is_empty() {
+                    ("WiFi (scanning…)".into(), PENDING)
+                } else {
+                    (
+                        format!("WiFi ({} scanning…)", m.wifi.interface_name),
+                        PENDING,
+                    )
+                }
+            }
+            (false, false) => {
+                if wifi_iface.is_empty() {
+                    ("WiFi (off)".into(), Style::default())
+                } else {
+                    (
+                        format!("WiFi ({}, off)", m.wifi.interface_name),
+                        Style::default(),
+                    )
+                }
+            }
         };
         let has_wipm = m.wifi_power_w > 0.0;
         if has_wipm {
@@ -1807,35 +1883,28 @@ impl App {
             ));
         }
 
-        // Network traffic (shown when any network interface is active)
-        let has_traffic =
-            s.net_down.get() > 0.0 || s.net_up.get() > 0.0 || self.wh.net_down_bytes > 0.0;
-        if m.wifi.connected || m.ethernet.connected || has_traffic {
-            let net_parent = if m.wifi.connected { "wifi" } else { "peripherals" };
-            let net_prefix = if m.wifi.connected {
-                format!("{}│  ", pc)
-            } else {
-                format!("{}   ", pc)
-            };
+        let wifi_has_traffic =
+            s.wifi_down.get() > 0.0 || s.wifi_up.get() > 0.0 || self.wh.wifi_down_bytes > 0.0;
+        if m.wifi.connected || wifi_has_traffic {
             let mut r = TreeRow::info(
-                Some(net_parent),
-                &format!("{}├─ ", net_prefix),
+                Some("wifi"),
+                &format!("{}│  ├─ ", pc),
                 "↓ Download",
-                &human_rate(s.net_down.get() as f64),
-                &human_bytes(self.wh.net_down_bytes),
+                &human_rate(s.wifi_down.get() as f64),
+                &human_bytes(self.wh.wifi_down_bytes),
                 DATA_STYLE,
             );
-            r.key = Some("net_down");
+            r.key = Some("wifi_down");
             rows.push(r);
             let mut r = TreeRow::info(
-                Some(net_parent),
-                &format!("{}└─ ", net_prefix),
+                Some("wifi"),
+                &format!("{}│  └─ ", pc),
                 "↑ Upload",
-                &human_rate(s.net_up.get() as f64),
-                &human_bytes(self.wh.net_up_bytes),
+                &human_rate(s.wifi_up.get() as f64),
+                &human_bytes(self.wh.wifi_up_bytes),
                 DATA_STYLE,
             );
-            r.key = Some("net_up");
+            r.key = Some("wifi_up");
             rows.push(r);
         }
 
@@ -2253,8 +2322,15 @@ impl App {
                         let skip = hist.len().saturating_sub(w);
                         let visible: Vec<f64> = hist.iter().skip(skip).copied().collect();
                         let vis_max = visible.iter().copied().fold(0.0f64, f64::max).max(0.001);
-                        let is_data_key =
-                            matches!(key, "net_down" | "net_up" | "disk_read" | "disk_write");
+                        let is_data_key = matches!(
+                            key,
+                            "eth_down"
+                                | "eth_up"
+                                | "wifi_down"
+                                | "wifi_up"
+                                | "disk_read"
+                                | "disk_write"
+                        );
                         for (ci, &val) in visible.iter().enumerate() {
                             let x = spark_x + (w - visible.len() + ci) as u16;
                             let level = (val / vis_max * 7.0).round() as usize;
@@ -2349,7 +2425,10 @@ impl App {
             let vis_max = visible_data.iter().copied().fold(0.0f64, f64::max);
             let scale_max = nice_scale(vis_max);
 
-            let is_data = matches!(key, "net_down" | "net_up" | "disk_read" | "disk_write");
+            let is_data = matches!(
+                key,
+                "eth_down" | "eth_up" | "wifi_down" | "wifi_up" | "disk_read" | "disk_write"
+            );
             let scale_h = inner[0].height;
             let fmt_axis = |v: f64| -> String {
                 if is_data {
