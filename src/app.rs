@@ -438,6 +438,8 @@ pub struct App {
     temp_max: BTreeMap<String, f32>,
     temp_sum: BTreeMap<String, f64>,
     temp_count: BTreeMap<String, u64>,
+    // Keys accumulate per PID for sparkline history; bounded by HISTORY_LEN per key.
+    // Dead process keys remain so pinned charts keep rendering.
     history: BTreeMap<&'static str, VecDeque<f64>>,
     pinned: Vec<&'static str>,
     collapsed: std::collections::HashSet<&'static str>,
@@ -445,6 +447,7 @@ pub struct App {
     row_keys_cache: Vec<Option<&'static str>>,
     row_parents_cache: Vec<Option<&'static str>>,
     row_is_sep: Vec<bool>,
+    // Insert-only: labels are kept for chart titles of dead/pinned processes.
     labels: BTreeMap<&'static str, String>,
     proc_baseline: std::collections::HashMap<i32, f64>,
     proc_keys: std::collections::HashMap<i32, &'static str>,
@@ -574,7 +577,7 @@ impl App {
                 let watts = d.power_ma.unwrap_or(0) as f64 * 5.0 / 1000.0;
                 self.usb_wh[i] += watts * dt_h;
                 let (prev_r, prev_w) = self.usb_prev_bytes[i];
-                if prev_r > 0 || prev_w > 0 {
+                if (prev_r > 0 || prev_w > 0) && dt_s > 0.001 {
                     self.usb_rates[i] = (
                         d.bytes_read.saturating_sub(prev_r) as f64 / dt_s,
                         d.bytes_written.saturating_sub(prev_w) as f64 / dt_s,
@@ -848,6 +851,8 @@ impl App {
         self.history.clear();
         self.fan_wh.iter_mut().for_each(|v| *v = 0.0);
         self.usb_wh.iter_mut().for_each(|v| *v = 0.0);
+        self.usb_prev_bytes.clear();
+        self.usb_rates.clear();
         self.proc_baseline = self
             .metrics
             .top_processes
@@ -2583,6 +2588,9 @@ fn usb_key(index: usize) -> &'static str {
     KEYS.get(index).copied().unwrap_or("usb0")
 }
 
+// Intentional Box::leak: history/charts require &'static str keys. Dead PIDs stay
+// in history so their sparklines remain visible. Bounded by unique PIDs per session
+// (~hundreds, ~20 bytes each). Cleared implicitly when the process exits.
 fn proc_key(cache: &mut std::collections::HashMap<i32, &'static str>, pid: i32) -> &'static str {
     cache
         .entry(pid)

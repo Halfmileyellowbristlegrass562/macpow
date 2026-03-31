@@ -951,9 +951,13 @@ impl Sampler {
                         mg.display.available = true;
                         mg.display.estimated_power_w =
                             if let Some((cur_ua, max_ua)) = backlight_current {
-                                let frac = cur_ua as f32 / max_ua as f32;
-                                let real_ma = frac * cal_max_ma;
-                                real_ma / 1000.0 * BACKLIGHT_VOLTAGE_V
+                                if max_ua > 0 {
+                                    let frac = cur_ua as f32 / max_ua as f32;
+                                    let real_ma = frac * cal_max_ma;
+                                    real_ma / 1000.0 * BACKLIGHT_VOLTAGE_V
+                                } else {
+                                    br * MAX_DISPLAY_W
+                                }
                             } else {
                                 br * MAX_DISPLAY_W
                             };
