@@ -29,6 +29,7 @@ pub struct Metrics {
     pub disk: DiskInfo,
     pub ssd_power_w: f32,
     pub usb_devices: Vec<UsbDevice>,
+    pub ethernet: EthernetInfo,
     pub wifi: WifiInfo,
     pub bluetooth_devices: Vec<BluetoothDevice>,
     pub bluetooth_power_w: f32,
@@ -170,6 +171,13 @@ pub struct AudioInfo {
 pub struct NetworkInfo {
     pub bytes_in_per_sec: f64,
     pub bytes_out_per_sec: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EthernetInfo {
+    pub connected: bool,
+    pub interface_name: String,
+    pub link_speed_mbps: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

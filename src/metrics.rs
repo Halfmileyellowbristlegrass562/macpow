@@ -1054,13 +1054,15 @@ impl Sampler {
             }));
         }
 
-        // ── WiFi ─────────────────────────────────────────────────────────
+        // ── WiFi + Ethernet ──────────────────────────────────────────────
         {
             let m = shared.clone();
             handles.push(std::thread::spawn(move || loop {
                 let wifi = peripherals::read_wifi_info();
+                let ethernet = peripherals::read_ethernet_info();
                 if let Ok(mut mg) = m.lock() {
                     mg.wifi = wifi;
+                    mg.ethernet = ethernet;
                 }
                 std::thread::sleep(dt);
             }));

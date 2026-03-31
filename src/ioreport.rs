@@ -115,6 +115,24 @@ fn parse_usize_ascii(s: &str) -> Option<usize> {
         .flatten()
 }
 
+/// Multi-die chips (M1/M2/M3 Ultra) prefix IOReport channel names with `DIE_{N}_`.
+/// Single-die chips have no prefix. We strip it generically so all downstream
+/// parsers work on the same base name format: `{TYPE}{cluster}_CPU{core}`.
+/// Returns `(die_index, remaining_name)` — die 0 for single-die chips.
+fn strip_die_prefix(name: &str) -> (usize, &str) {
+    if let Some(rest) = name.strip_prefix("DIE_") {
+        if let Some(idx) = rest.find('_') {
+            if let Ok(die) = rest[..idx].parse::<usize>() {
+                return (die, &rest[idx + 1..]);
+            }
+        }
+    }
+    (0, name)
+}
+
+/// Cluster offset per die — keeps cluster IDs unique across dies.
+const CLUSTERS_PER_DIE: usize = 100;
+
 fn parse_cpu_stats_core_key(name: &str) -> Option<CpuCoreKey> {
     let (kind, suffix) = if let Some(rest) = name.strip_prefix("ECPU") {
         (CpuKind::Efficiency, rest)
@@ -126,28 +144,31 @@ fn parse_cpu_stats_core_key(name: &str) -> Option<CpuCoreKey> {
         return None;
     };
 
-    if !suffix.chars().all(|c| c.is_ascii_digit()) {
-        return None;
+    // Digit-suffix format: ECPU0, PCPU10 (single-die M1/M2/M3/M4)
+    if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+        let trimmed = if suffix.len() >= 3 && suffix.ends_with('0') {
+            &suffix[..suffix.len() - 1]
+        } else {
+            suffix
+        };
+
+        let (cluster, core) = if trimmed.len() == 1 {
+            (0, parse_usize_ascii(trimmed)?)
+        } else {
+            let (cluster, core) = trimmed.split_at(trimmed.len() - 1);
+            (parse_usize_ascii(cluster)?, parse_usize_ascii(core)?)
+        };
+
+        return Some(CpuCoreKey {
+            kind,
+            cluster,
+            core,
+        });
     }
 
-    let trimmed = if suffix.len() >= 3 && suffix.ends_with('0') {
-        &suffix[..suffix.len() - 1]
-    } else {
-        suffix
-    };
-
-    let (cluster, core) = if trimmed.len() == 1 {
-        (0, parse_usize_ascii(trimmed)?)
-    } else {
-        let (cluster, core) = trimmed.split_at(trimmed.len() - 1);
-        (parse_usize_ascii(cluster)?, parse_usize_ascii(core)?)
-    };
-
-    Some(CpuCoreKey {
-        kind,
-        cluster,
-        core,
-    })
+    // _CPU suffix format: ECPU_CPU0, PCPU1_CPU3 (multi-die Ultra after DIE_N_ stripped)
+    parse_acc_core_key(name, "ECPU", CpuKind::Efficiency)
+        .or_else(|| parse_acc_core_key(name, "PCPU", CpuKind::Performance))
 }
 
 fn parse_acc_core_key(name: &str, prefix: &str, kind: CpuKind) -> Option<CpuCoreKey> {
@@ -586,7 +607,10 @@ impl IOReportSampler {
 
                 if group == "CPU Stats" || group == "GPU Stats" {
                     let state_count = IOReportStateGetCount(ch);
-                    let stats_key = parse_cpu_stats_core_key(&name);
+                    let (die, base_name) = strip_die_prefix(&name);
+                    let die_offset = die * CLUSTERS_PER_DIE;
+                    let stats_key = parse_cpu_stats_core_key(base_name)
+                        .map(|mut k| { k.cluster += die_offset; k });
                     if let Some(key) = stats_key {
                         if seen_stats_keys.insert(key) {
                             match key.kind {
@@ -663,8 +687,15 @@ impl IOReportSampler {
                 let val = IOReportSimpleGetIntegerValue(ch, 0);
                 let watts = energy_to_watts(val, &unit, dt_ms);
 
+                // Strip DIE_N_ prefix for CPU core channels; block channels use
+                // per-die suffixes (e.g. "ISP0_0") instead, handled by starts_with.
+                let (die, base_name) = strip_die_prefix(&name);
+                let die_offset = die * CLUSTERS_PER_DIE;
+
+                // Block power channels use bare names on single-die chips (e.g. "ISP")
+                // but gain per-die suffixes on multi-die chips (e.g. "ISP0_0").
+                // Using starts_with() handles both and any future suffix convention.
                 match name.as_str() {
-                    // Grand CPU total
                     n if n.ends_with("CPU Energy") => {
                         soc.cpu_w += watts;
                     }
@@ -681,26 +712,31 @@ impl IOReportSampler {
                     n if n.starts_with("GPU SRAM") => {
                         soc.gpu_sram_w += watts;
                     }
-                    "ISP" => {
+                    n if n.starts_with("ISP") => {
                         soc.isp_w += watts;
                     }
-                    "DISP" => {
-                        soc.display_soc_w += watts;
-                    }
-                    "DISPEXT" => {
+                    n if n.starts_with("DISPEXT") => {
                         soc.display_ext_w += watts;
                     }
-                    "AVE" | "MSR" => {
+                    n if n.starts_with("DISP") => {
+                        soc.display_soc_w += watts;
+                    }
+                    n if n.starts_with("AVE") || n.starts_with("MSR") => {
                         soc.media_w += watts;
                     }
                     n if n.starts_with("PCIe Port") || n.starts_with("apciec") => {
                         soc.pcie_w += watts;
                     }
-                    "AMCC" | "DCS" | "FAB" | "AFR" => {
+                    n if n.starts_with("AMCC")
+                        || n.starts_with("DCS")
+                        || n.starts_with("FAB")
+                        || n.starts_with("AFR") =>
+                    {
                         soc.fabric_w += watts;
                     }
                     _ => {
-                        if let Some(key) = parse_energy_core_key(&name) {
+                        if let Some(mut key) = parse_energy_core_key(base_name) {
+                            key.cluster += die_offset;
                             match key.kind {
                                 CpuKind::Efficiency => {
                                     ecpu_power.insert(key, (name.clone(), watts));
@@ -709,7 +745,10 @@ impl IOReportSampler {
                                     pcpu_power.insert(key, (name.clone(), watts));
                                 }
                             }
-                        } else if let Some((kind, cluster)) = parse_energy_cluster_total(&name) {
+                        } else if let Some((kind, cluster)) =
+                            parse_energy_cluster_total(base_name)
+                        {
+                            let cluster = cluster + die_offset;
                             match kind {
                                 CpuKind::Efficiency => {
                                     ecpu_totals.insert(cluster, (name.clone(), watts));

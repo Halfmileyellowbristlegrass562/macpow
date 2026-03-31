@@ -1,6 +1,6 @@
 use crate::cf_utils;
 use crate::iokit_ffi::*;
-use crate::types::{BluetoothDevice, PowerAssertion, UsbDevice, WifiInfo};
+use crate::types::{BluetoothDevice, EthernetInfo, PowerAssertion, UsbDevice, WifiInfo};
 use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::dictionary::{CFDictionaryRef, CFMutableDictionaryRef};
 use core_foundation_sys::number::CFNumberRef;
@@ -197,6 +197,72 @@ extern "C" {
     fn objc_msgSend(obj: *mut libc::c_void, sel: *mut libc::c_void, ...) -> *mut libc::c_void;
 }
 
+// ── Ethernet detection via getifaddrs ─────────────────────────────────────────
+
+pub fn read_ethernet_info() -> EthernetInfo {
+    #[repr(C)]
+    struct IfData {
+        ifi_type: u8,
+        _pad: [u8; 7],
+        ifi_mtu: u32,
+        ifi_metric: u32,
+        ifi_baudrate: u32,
+    }
+
+    const IFT_ETHER: u8 = 6;
+
+    unsafe {
+        let mut addrs: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut addrs) != 0 {
+            return EthernetInfo::default();
+        }
+
+        let mut best: Option<(String, u32)> = None;
+        let mut cur = addrs;
+        while !cur.is_null() {
+            let entry = &*cur;
+            cur = entry.ifa_next;
+
+            if entry.ifa_addr.is_null() || entry.ifa_data.is_null() {
+                continue;
+            }
+            if (*entry.ifa_addr).sa_family as i32 != libc::AF_LINK {
+                continue;
+            }
+            let name = std::ffi::CStr::from_ptr(entry.ifa_name).to_string_lossy();
+            if !name.starts_with("en") {
+                continue;
+            }
+            let data = &*(entry.ifa_data as *const IfData);
+            if data.ifi_type != IFT_ETHER {
+                continue;
+            }
+            let flags = entry.ifa_flags;
+            let up = (flags & libc::IFF_UP as u32) != 0;
+            let running = (flags & libc::IFF_RUNNING as u32) != 0;
+            if !up || !running {
+                continue;
+            }
+            let speed_mbps = data.ifi_baudrate / 1_000_000;
+            if best.is_none() || speed_mbps > best.as_ref().unwrap().1 {
+                best = Some((name.into_owned(), speed_mbps));
+            }
+        }
+        libc::freeifaddrs(addrs);
+
+        match best {
+            Some((iface, speed)) => EthernetInfo {
+                connected: true,
+                interface_name: iface,
+                link_speed_mbps: speed,
+            },
+            None => EthernetInfo::default(),
+        }
+    }
+}
+
+// ── WiFi via CoreWLAN ─────────────────────────────────────────────────────────
+
 fn phy_mode_str(mode: i64) -> &'static str {
     match mode {
         1 => "802.11a",
@@ -210,9 +276,9 @@ fn phy_mode_str(mode: i64) -> &'static str {
     }
 }
 
-fn read_wifi_ssid_ipconfig() -> Option<String> {
+fn read_wifi_ssid_ipconfig(iface_name: &str) -> Option<String> {
     let output = std::process::Command::new("ipconfig")
-        .args(["getsummary", "en0"])
+        .args(["getsummary", iface_name])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
@@ -230,20 +296,35 @@ fn read_wifi_ssid_ipconfig() -> Option<String> {
 
 pub fn read_wifi_info() -> WifiInfo {
     unsafe {
+        let no_hardware = WifiInfo {
+            phy_mode: "none".into(),
+            ..Default::default()
+        };
+
         let cls = objc_getClass(b"CWWiFiClient\0".as_ptr() as _);
         if cls.is_null() {
-            return WifiInfo::default();
+            return no_hardware;
         }
         let sel_shared = sel_registerName(b"sharedWiFiClient\0".as_ptr() as _);
         let client = objc_msgSend(cls, sel_shared);
         if client.is_null() {
-            return WifiInfo::default();
+            return no_hardware;
         }
         let sel_iface = sel_registerName(b"interface\0".as_ptr() as _);
         let iface = objc_msgSend(client, sel_iface);
         if iface.is_null() {
-            return WifiInfo::default();
+            return no_hardware;
         }
+
+        // Get the actual interface name (e.g. en0 on laptops, en1 on Mac Studio)
+        // so the ipconfig fallback queries the right interface.
+        let sel_iface_name = sel_registerName(b"interfaceName\0".as_ptr() as _);
+        let iface_name_ns = objc_msgSend(iface, sel_iface_name);
+        let iface_name = if !iface_name_ns.is_null() {
+            cf_utils::cfstring_to_string(iface_name_ns as _).unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         // ssid requires location permission (nil for unsigned binaries since Sonoma)
         // Fall back to ipconfig getsummary for SSID
@@ -251,8 +332,10 @@ pub fn read_wifi_info() -> WifiInfo {
         let ssid_ns = objc_msgSend(iface, sel_ssid);
         let ssid = if !ssid_ns.is_null() {
             cf_utils::cfstring_to_string(ssid_ns as _).unwrap_or_default()
+        } else if !iface_name.is_empty() {
+            read_wifi_ssid_ipconfig(&iface_name).unwrap_or_default()
         } else {
-            read_wifi_ssid_ipconfig().unwrap_or_default()
+            read_wifi_ssid_ipconfig("en0").unwrap_or_default()
         };
 
         let connected = !ssid.is_empty();

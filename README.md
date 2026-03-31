@@ -137,6 +137,29 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | Network | getifaddrs | Byte counters (no power model, data only) |
 | USB | IORegistry PowerOutDetails | Per-port power measurement (Watts/PDPowermW) |
 
+### IOReport channel naming (multi-die support)
+
+IOReport channel names vary between single-die and multi-die (Ultra) chips. The parser handles both generically:
+
+```
+Single-die (M1/M2/M3/M4 base/Pro/Max):
+  CPU Stats:    ECPU0, PCPU10             ← digit suffix
+  Energy Model: EACC_CPU0, PACC0_CPU5     ← _CPU suffix
+  Blocks:       ISP, DRAM, ANE, DISP      ← bare names
+
+Multi-die (M1/M2/M3 Ultra):
+  CPU Stats:    DIE_0_ECPU_CPU0, DIE_1_PCPU1_CPU3   ← DIE_N_ prefix + _CPU suffix
+  Energy Model: DIE_0_EACC_CPU0, DIE_1_PACC1_CPU3   ← DIE_N_ prefix + _CPU suffix
+  Blocks:       ISP0_0, DRAM0_1, ANE0_0              ← per-die suffix
+```
+
+Two design rules keep this forward-compatible with future chips:
+
+1. **`strip_die_prefix`** generically removes `DIE_{N}_` so downstream parsers always see the same base format
+2. **`starts_with`** matching for block power handles any suffix Apple may add (e.g. `ISP` matches `ISP`, `ISP0_0`, `ISP0_1`, etc.)
+
+If a new chip isn't detected correctly, run `macpow --dump` to see the raw IOReport channel names.
+
 ## Requirements
 
 - macOS 12+ (Monterey or later)

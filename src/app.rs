@@ -1238,10 +1238,11 @@ impl App {
             } else {
                 p_usage.iter().sum::<f32>() / p_usage.len() as f32
             };
-            let cpu_avg_usage = if cpu_usage.is_empty() {
+            let total_cores = e_count + p_count;
+            let cpu_avg_usage = if total_cores == 0 || cpu_usage.is_empty() {
                 0.0
             } else {
-                cpu_usage.iter().take(e_count + p_count).sum::<f32>() / (e_count + p_count) as f32
+                cpu_usage.iter().take(total_cores).sum::<f32>() / total_cores as f32
             };
 
             rows.push(TreeRow::pw_full(
@@ -1739,6 +1740,33 @@ impl App {
             pin("pcie"),
         ));
 
+        // Ethernet
+        if m.ethernet.connected {
+            let eth_label = if m.ethernet.link_speed_mbps >= 1000 {
+                format!(
+                    "Ethernet ({} Gbps, {})",
+                    m.ethernet.link_speed_mbps / 1000,
+                    m.ethernet.interface_name
+                )
+            } else if m.ethernet.link_speed_mbps > 0 {
+                format!(
+                    "Ethernet ({} Mbps, {})",
+                    m.ethernet.link_speed_mbps, m.ethernet.interface_name
+                )
+            } else {
+                format!("Ethernet ({})", m.ethernet.interface_name)
+            };
+            rows.push(TreeRow::info(
+                Some("peripherals"),
+                &format!("{}├─ ", pc),
+                &eth_label,
+                "",
+                "",
+                Style::default(),
+            ));
+        }
+
+        // WiFi
         let (wifi_name, wifi_style) = match (m.wifi.connected, m.wifi.phy_mode.is_empty()) {
             (true, _) => {
                 let ch = if m.wifi.channel.is_empty() {
@@ -1779,12 +1807,19 @@ impl App {
             ));
         }
 
+        // Network traffic (shown when any network interface is active)
         let has_traffic =
             s.net_down.get() > 0.0 || s.net_up.get() > 0.0 || self.wh.net_down_bytes > 0.0;
-        if m.wifi.connected || has_traffic {
+        if m.wifi.connected || m.ethernet.connected || has_traffic {
+            let net_parent = if m.wifi.connected { "wifi" } else { "peripherals" };
+            let net_prefix = if m.wifi.connected {
+                format!("{}│  ", pc)
+            } else {
+                format!("{}   ", pc)
+            };
             let mut r = TreeRow::info(
-                Some("wifi"),
-                &format!("{}│  ├─ ", pc),
+                Some(net_parent),
+                &format!("{}├─ ", net_prefix),
                 "↓ Download",
                 &human_rate(s.net_down.get() as f64),
                 &human_bytes(self.wh.net_down_bytes),
@@ -1793,8 +1828,8 @@ impl App {
             r.key = Some("net_down");
             rows.push(r);
             let mut r = TreeRow::info(
-                Some("wifi"),
-                &format!("{}│  └─ ", pc),
+                Some(net_parent),
+                &format!("{}└─ ", net_prefix),
                 "↑ Upload",
                 &human_rate(s.net_up.get() as f64),
                 &human_bytes(self.wh.net_up_bytes),
