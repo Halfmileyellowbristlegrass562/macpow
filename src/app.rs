@@ -2132,7 +2132,7 @@ impl App {
         buf.set_string(inner.x + 2, hdr_y, "Component", BOLD);
         right_str(buf, frq_x, hdr_y, COL_FREQ, "Freq", BOLD);
         right_str(buf, tmp_x, hdr_y, COL_TEMP, "Temp", BOLD);
-        right_str(buf, cur_x, hdr_y, COL_CUR, "Current", BOLD);
+        right_str(buf, cur_x, hdr_y, COL_CUR, "Power", BOLD);
         right_str(buf, tot_x, hdr_y, COL_TOT, "Total", BOLD);
         if spark_w > 0 {
             right_str(buf, spark_x, hdr_y, spark_w, "History", BOLD);
