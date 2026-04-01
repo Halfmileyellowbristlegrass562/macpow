@@ -2668,8 +2668,6 @@ impl App {
                     let mw = v * 1000.0;
                     if mw.abs() >= 100.0 {
                         format!("{:.0}mW", mw)
-                    } else if mw.abs() >= 10.0 {
-                        format!("{:.1}mW", mw)
                     } else if mw.abs() >= 1.0 {
                         format!("{:.1}mW", mw)
                     } else if mw.abs() > 0.0 {
