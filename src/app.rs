@@ -2255,6 +2255,7 @@ impl App {
         let reserved = visible_tree_rows + 5 + chart_slots * CHART_HEIGHT as usize;
         let proc_limit = ((self.term_height as usize).saturating_sub(reserved)).max(10);
         {
+            let sw_color = power_color(m.all_procs_power_w * 1000.0);
             let mut sw_row = TreeRow::pw(
                 "software",
                 None,
@@ -2262,11 +2263,11 @@ impl App {
                 &format!("Software (filter: top {} by total)", proc_limit),
                 m.all_procs_power_w + 0.0,
                 all_sw_energy / 3600.0 / 1000.0,
-                BOLD,
+                Style::default().fg(sw_color).add_modifier(Modifier::BOLD),
                 pin("software"),
             );
             sw_row.current = format!("{:>5.1} mW", m.all_procs_power_w * 1000.0);
-            sw_row.label_style = BOLD;
+            sw_row.current_style = Style::default().fg(sw_color);
             rows.push(sw_row);
         }
         if m.top_processes.is_empty() {
@@ -2316,7 +2317,7 @@ impl App {
             } else if p.pid == self_pid {
                 Color::Blue
             } else {
-                power_color(p.power_w)
+                power_color(p.power_w * 1000.0)
             };
             let key = proc_row_keys[i];
             let mem_str = human_bytes(p.phys_mem_bytes as f64);
@@ -2549,7 +2550,7 @@ impl App {
                         let w = spark_w as usize;
                         let skip = hist.len().saturating_sub(w);
                         let visible: Vec<f64> = hist.iter().skip(skip).copied().collect();
-                        let vis_max = visible.iter().copied().fold(0.0f64, f64::max).max(0.001);
+                        let vis_max = visible.iter().copied().fold(0.0f64, f64::max).max(1e-6);
                         let is_data_key = matches!(
                             key,
                             "eth_down"
@@ -2663,10 +2664,21 @@ impl App {
             let fmt_axis = |v: f64| -> String {
                 if is_data {
                     human_rate(v)
-                } else if v.abs() < 0.1 && v.abs() > 0.0 {
-                    format!("{:>3.0}mW", v * 1000.0)
                 } else {
-                    format!("{:>5.1}", v)
+                    let mw = v * 1000.0;
+                    if mw.abs() >= 100.0 {
+                        format!("{:.0}mW", mw)
+                    } else if mw.abs() >= 10.0 {
+                        format!("{:.1}mW", mw)
+                    } else if mw.abs() >= 1.0 {
+                        format!("{:.1}mW", mw)
+                    } else if mw.abs() > 0.0 {
+                        format!("{:.2}mW", mw)
+                    } else if v.abs() >= 1.0 {
+                        format!("{:.1}W", v)
+                    } else {
+                        format!("{:.0}mW", mw)
+                    }
                 }
             };
             let scale_lines: Vec<Line> = (0..scale_h)
@@ -2757,12 +2769,8 @@ impl App {
             Span::raw(format!(" avg:{}s  ", self.sma_window)),
             Span::styled("l", Style::default().fg(Color::Yellow)),
             Span::raw(format!(" {}ms  ", self.interval_ms)),
-            Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
-            Span::raw(" select  "),
-            Span::styled("←/→", Style::default().fg(Color::Yellow)),
-            Span::raw(" fold  "),
-            Span::styled("+/-", Style::default().fg(Color::Yellow)),
-            Span::raw(" all  "),
+            Span::styled("↑↓←→+-", Style::default().fg(Color::Yellow)),
+            Span::raw(" tree  "),
             Span::styled("space", Style::default().fg(Color::Yellow)),
             Span::raw(" pin    "),
             Span::styled("■", Style::default().fg(Color::Rgb(46, 139, 87))),
@@ -2772,9 +2780,7 @@ impl App {
             Span::styled("■", Style::default().fg(Color::Rgb(255, 140, 0))),
             Span::raw("<10W "),
             Span::styled("■", Style::default().fg(Color::Rgb(255, 50, 50))),
-            Span::raw("≥10W "),
-            Span::styled("■", PENDING),
-            Span::raw("pending"),
+            Span::raw("≥10W"),
         ]));
         f.render_widget(footer, area);
     }
@@ -2900,8 +2906,8 @@ fn nice_scale(max_val: f64) -> f64 {
         return 1.0;
     }
     let steps = [
-        0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0,
-        100.0, 200.0,
+        0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0,
+        5.0, 10.0, 20.0, 50.0, 100.0, 200.0,
     ];
     steps
         .iter()
