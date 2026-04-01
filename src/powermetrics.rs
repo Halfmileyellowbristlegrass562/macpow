@@ -164,3 +164,42 @@ pub fn compute_disk_rates(prev: &DiskCounters, cur: &DiskCounters, dt_s: f64) ->
         write_bytes_per_sec: cur.1.saturating_sub(prev.1) as f64 / dt_s,
     }
 }
+
+// ── Per-process network via nettop ───────────────────────────────────────────
+
+/// Cumulative per-process network byte counters from nettop.
+pub type ProcNetCounters = HashMap<i32, (u64, u64)>; // pid → (rx_bytes, tx_bytes)
+
+/// Read per-process cumulative network bytes via `nettop -P -n -L 1 -x`.
+/// Returns in ~18ms. Parses CSV: "name.pid,,iface,state,bytes_in,bytes_out,..."
+pub fn read_proc_net_counters() -> ProcNetCounters {
+    let output = match std::process::Command::new("nettop")
+        .args(["-P", "-n", "-L", "1", "-x"])
+        .output()
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return HashMap::new(),
+    };
+
+    let mut result = HashMap::new();
+    for line in output.lines().skip(1) {
+        let cols: Vec<&str> = line.split(',').collect();
+        if cols.len() < 7 {
+            continue;
+        }
+        // Format: time,name.pid,iface,state,bytes_in,bytes_out,...
+        let name_pid = cols[1];
+        let pid: i32 = match name_pid.rsplit('.').next().and_then(|s| s.parse().ok()) {
+            Some(p) if p > 0 => p,
+            _ => continue,
+        };
+        let rx: u64 = cols[4].trim().parse().unwrap_or(0);
+        let tx: u64 = cols[5].trim().parse().unwrap_or(0);
+        if rx > 0 || tx > 0 {
+            let e = result.entry(pid).or_insert((0u64, 0u64));
+            e.0 += rx;
+            e.1 += tx;
+        }
+    }
+    result
+}

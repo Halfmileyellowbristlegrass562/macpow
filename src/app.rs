@@ -422,7 +422,7 @@ pub struct App {
     wh: Wh,
     sma: MetricsSma,
     pub sma_window: u32,
-    pub latency_ms: u64,
+    pub interval_ms: u64,
     temp_min: BTreeMap<String, f32>,
     temp_max: BTreeMap<String, f32>,
     temp_sum: BTreeMap<String, f64>,
@@ -440,6 +440,12 @@ pub struct App {
     labels: BTreeMap<&'static str, String>,
     proc_baseline: std::collections::HashMap<i32, f64>,
     proc_keys: std::collections::HashMap<i32, &'static str>,
+    proc_prev_disk: std::collections::HashMap<i32, (u64, u64, Instant)>,
+    proc_prev_net: std::collections::HashMap<i32, (u64, u64, Instant)>,
+    proc_base_disk: std::collections::HashMap<i32, (u64, u64)>,
+    proc_base_net: std::collections::HashMap<i32, (u64, u64)>,
+    proc_disk_rates: std::collections::HashMap<i32, (f64, f64)>,
+    proc_net_rates: std::collections::HashMap<i32, (f64, f64)>,
     fan_wh: Vec<f64>,
     usb_wh: Vec<f64>,
     usb_prev_bytes: Vec<(u64, u64)>,
@@ -461,7 +467,7 @@ impl App {
             wh: Wh::default(),
             sma: MetricsSma::new(0.0),
             sma_window: 0,
-            latency_ms: 250,
+            interval_ms: 250,
             temp_min: BTreeMap::new(),
             temp_max: BTreeMap::new(),
             temp_sum: BTreeMap::new(),
@@ -497,6 +503,12 @@ impl App {
             labels: BTreeMap::new(),
             proc_baseline: std::collections::HashMap::new(),
             proc_keys: std::collections::HashMap::new(),
+            proc_prev_disk: std::collections::HashMap::new(),
+            proc_prev_net: std::collections::HashMap::new(),
+            proc_base_disk: std::collections::HashMap::new(),
+            proc_base_net: std::collections::HashMap::new(),
+            proc_disk_rates: std::collections::HashMap::new(),
+            proc_net_rates: std::collections::HashMap::new(),
             fan_wh: Vec::new(),
             usb_wh: Vec::new(),
             usb_prev_bytes: Vec::new(),
@@ -688,6 +700,70 @@ impl App {
         for p in &m.top_processes {
             let key = proc_key(&mut self.proc_keys, p.pid);
             self.push_history(key, p.power_w as f64);
+            // Per-process disk I/O and network rate history.
+            // rusage counters update infrequently; use per-process timestamps
+            // to get correct dt since the data actually changed.
+            let now = Instant::now();
+            let cur_disk = (p.disk_read_bytes, p.disk_write_bytes);
+            if let Some(&(pr, pw, prev_time)) = self.proc_prev_disk.get(&p.pid) {
+                let elapsed = now.duration_since(prev_time).as_secs_f64();
+                if cur_disk != (pr, pw) {
+                    let dt_s = elapsed.max(0.01);
+                    let dr = p.disk_read_bytes.saturating_sub(pr) as f64 / dt_s;
+                    let dw = p.disk_write_bytes.saturating_sub(pw) as f64 / dt_s;
+                    self.proc_disk_rates.insert(p.pid, (dr, dw));
+                    self.proc_prev_disk
+                        .insert(p.pid, (p.disk_read_bytes, p.disk_write_bytes, now));
+                } else if elapsed > 2.0 {
+                    self.proc_disk_rates.insert(p.pid, (0.0, 0.0));
+                }
+            } else {
+                self.proc_prev_disk
+                    .insert(p.pid, (p.disk_read_bytes, p.disk_write_bytes, now));
+            }
+            let rkey = proc_key(&mut self.proc_keys, -(p.pid + 100_000));
+            let wkey = proc_key(&mut self.proc_keys, -(p.pid + 200_000));
+            let (dr, dw) = self
+                .proc_disk_rates
+                .get(&p.pid)
+                .copied()
+                .unwrap_or((0.0, 0.0));
+            self.push_history(rkey, dr);
+            self.push_history(wkey, dw);
+
+            let cur_net = (p.net_rx_bytes, p.net_tx_bytes);
+            if let Some(&(prx, ptx, prev_time)) = self.proc_prev_net.get(&p.pid) {
+                let elapsed = now.duration_since(prev_time).as_secs_f64();
+                if cur_net != (prx, ptx) {
+                    let dt_s = elapsed.max(0.01);
+                    let nr = p.net_rx_bytes.saturating_sub(prx) as f64 / dt_s;
+                    let nt = p.net_tx_bytes.saturating_sub(ptx) as f64 / dt_s;
+                    self.proc_net_rates.insert(p.pid, (nr, nt));
+                    self.proc_prev_net
+                        .insert(p.pid, (p.net_rx_bytes, p.net_tx_bytes, now));
+                } else if elapsed > 2.0 {
+                    self.proc_net_rates.insert(p.pid, (0.0, 0.0));
+                }
+            } else {
+                self.proc_prev_net
+                    .insert(p.pid, (p.net_rx_bytes, p.net_tx_bytes, now));
+            }
+            let rxkey = proc_key(&mut self.proc_keys, -(p.pid + 300_000));
+            let txkey = proc_key(&mut self.proc_keys, -(p.pid + 400_000));
+            let (nr, nt) = self
+                .proc_net_rates
+                .get(&p.pid)
+                .copied()
+                .unwrap_or((0.0, 0.0));
+            self.push_history(rxkey, nr);
+            self.push_history(txkey, nt);
+
+            self.proc_base_disk
+                .entry(p.pid)
+                .or_insert((p.disk_read_bytes, p.disk_write_bytes));
+            self.proc_base_net
+                .entry(p.pid)
+                .or_insert((p.net_rx_bytes, p.net_tx_bytes));
         }
 
         let cat_now = temps_by_category(&m.temperatures);
@@ -875,15 +951,16 @@ impl App {
     }
 
     fn cycle_latency(&mut self) {
-        self.latency_ms = match self.latency_ms {
-            250 => 1000,
+        self.interval_ms = match self.interval_ms {
+            250 => 500,
+            500 => 1000,
             1000 => 2000,
             _ => 250,
         };
     }
 
     pub fn poll_interval_ms(&self) -> u64 {
-        self.latency_ms
+        self.interval_ms
     }
 
     pub fn draw(&mut self, f: &mut Frame) {
@@ -2215,12 +2292,19 @@ impl App {
             .collect();
         display_procs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         display_procs.truncate(proc_limit);
-        // Pre-compute per-process keys
+        // Pre-compute per-process keys; auto-collapse newly seen processes
         let proc_row_keys: Vec<&'static str> = display_procs
             .iter()
-            .map(|(p, _)| proc_key(&mut self.proc_keys, p.pid))
+            .map(|(p, _)| {
+                let key = proc_key(&mut self.proc_keys, p.pid);
+                if !self.labels.contains_key(key) {
+                    self.collapsed.insert(key);
+                    self.labels.insert(key, String::new());
+                }
+                key
+            })
             .collect();
-        rows.extend(display_procs.iter().enumerate().map(|(i, (p, adj_mj))| {
+        for (i, (p, adj_mj)) in display_procs.iter().enumerate() {
             let pfx = if i == display_procs.len() - 1 {
                 "└─ "
             } else {
@@ -2235,10 +2319,11 @@ impl App {
                 power_color(p.power_w)
             };
             let key = proc_row_keys[i];
+            let mem_str = human_bytes(p.phys_mem_bytes as f64);
             let label = if dead {
-                format!("{} ({}) [dead]", p.name, p.pid)
+                format!("{} (pid {}, {}) [dead]", p.name, p.pid, mem_str)
             } else {
-                format!("{} ({})", p.name, p.pid)
+                format!("{} (pid {}, {})", p.name, p.pid, mem_str)
             };
             let mut r = TreeRow::pw(
                 key,
@@ -2252,8 +2337,86 @@ impl App {
             );
             r.current = format!("{:>5.1} mW", p.power_w * 1000.0);
             r.current_style = Style::default().fg(color);
-            r
-        }));
+            rows.push(r);
+
+            // Per-process disk + network sub-items (collapsed by default)
+            let base_disk = self.proc_base_disk.get(&p.pid).copied().unwrap_or((0, 0));
+            let base_net = self.proc_base_net.get(&p.pid).copied().unwrap_or((0, 0));
+            let session_dr = p.disk_read_bytes.saturating_sub(base_disk.0);
+            let session_dw = p.disk_write_bytes.saturating_sub(base_disk.1);
+            let session_rx = p.net_rx_bytes.saturating_sub(base_net.0);
+            let session_tx = p.net_tx_bytes.saturating_sub(base_net.1);
+            let has_disk = session_dr > 0 || session_dw > 0;
+            let has_net = session_rx > 0 || session_tx > 0;
+            if has_disk || has_net {
+                let cont = if i == display_procs.len() - 1 {
+                    "   "
+                } else {
+                    "│  "
+                };
+
+                if has_disk {
+                    let (read_rate, write_rate) = self
+                        .proc_disk_rates
+                        .get(&p.pid)
+                        .copied()
+                        .unwrap_or((0.0, 0.0));
+                    let rkey = proc_key(&mut self.proc_keys, -(p.pid + 100_000));
+                    let wkey = proc_key(&mut self.proc_keys, -(p.pid + 200_000));
+                    let mut r = TreeRow::info(
+                        Some(key),
+                        &format!("{}├─ ", cont),
+                        "Disk Read",
+                        &human_rate(read_rate),
+                        &human_bytes(session_dr as f64),
+                        DATA_STYLE,
+                    );
+                    r.key = Some(rkey);
+                    rows.push(r);
+                    let last = if has_net { "├─ " } else { "└─ " };
+                    let mut r = TreeRow::info(
+                        Some(key),
+                        &format!("{}{}", cont, last),
+                        "Disk Write",
+                        &human_rate(write_rate),
+                        &human_bytes(session_dw as f64),
+                        DATA_STYLE,
+                    );
+                    r.key = Some(wkey);
+                    rows.push(r);
+                }
+
+                if has_net {
+                    let (rx_rate, tx_rate) = self
+                        .proc_net_rates
+                        .get(&p.pid)
+                        .copied()
+                        .unwrap_or((0.0, 0.0));
+                    let rxkey = proc_key(&mut self.proc_keys, -(p.pid + 300_000));
+                    let txkey = proc_key(&mut self.proc_keys, -(p.pid + 400_000));
+                    let mut r = TreeRow::info(
+                        Some(key),
+                        &format!("{}├─ ", cont),
+                        "↓ Download",
+                        &human_rate(rx_rate),
+                        &human_bytes(session_rx as f64),
+                        DATA_STYLE,
+                    );
+                    r.key = Some(rxkey);
+                    rows.push(r);
+                    let mut r = TreeRow::info(
+                        Some(key),
+                        &format!("{}└─ ", cont),
+                        "↑ Upload",
+                        &human_rate(tx_rate),
+                        &human_bytes(session_tx as f64),
+                        DATA_STYLE,
+                    );
+                    r.key = Some(txkey);
+                    rows.push(r);
+                }
+            }
+        }
 
         rows
     }
@@ -2302,7 +2465,7 @@ impl App {
         right_str(buf, frq_x, hdr_y, COL_FREQ, "Freq", BOLD);
         right_str(buf, tmp_x, hdr_y, COL_TEMP, "Temp", BOLD);
         right_str(buf, cur_x, hdr_y, COL_CUR, "Power", BOLD);
-        right_str(buf, tot_x, hdr_y, COL_TOT, "Total", BOLD);
+        right_str(buf, tot_x, hdr_y, COL_TOT, "Cumulative", BOLD);
         if spark_w > 0 {
             right_str(buf, spark_x, hdr_y, spark_w, "History", BOLD);
         }
@@ -2395,7 +2558,8 @@ impl App {
                                 | "wifi_up"
                                 | "disk_read"
                                 | "disk_write"
-                        );
+                        ) || (key.starts_with("pid.-")
+                            && key[5..].parse::<i64>().unwrap_or(0).abs() >= 100_000);
                         for (ci, &val) in visible.iter().enumerate() {
                             let x = spark_x + (w - visible.len() + ci) as u16;
                             let level = (val / vis_max * 7.0).round() as usize;
@@ -2493,7 +2657,8 @@ impl App {
             let is_data = matches!(
                 key,
                 "eth_down" | "eth_up" | "wifi_down" | "wifi_up" | "disk_read" | "disk_write"
-            );
+            ) || (key.starts_with("pid.-")
+                && key[5..].parse::<i64>().unwrap_or(0).abs() >= 100_000);
             let scale_h = inner[0].height;
             let fmt_axis = |v: f64| -> String {
                 if is_data {
@@ -2591,7 +2756,7 @@ impl App {
             Span::styled("a", Style::default().fg(Color::Yellow)),
             Span::raw(format!(" avg:{}s  ", self.sma_window)),
             Span::styled("l", Style::default().fg(Color::Yellow)),
-            Span::raw(format!(" {}ms  ", self.latency_ms)),
+            Span::raw(format!(" {}ms  ", self.interval_ms)),
             Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
             Span::raw(" select  "),
             Span::styled("←/→", Style::default().fg(Color::Yellow)),

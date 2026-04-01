@@ -489,9 +489,13 @@ const RUSAGE_INFO_V4: i32 = 4;
 // rusage_info_v4: 16-byte UUID + 35 uint64_t fields = 296 bytes
 // ri_billed_energy is field #31 (0-indexed) after the UUID
 const BILLED_ENERGY_OFFSET: usize = 16 + 31 * 8; // = 264
+const DISKIO_READ_OFFSET: usize = 16 + 16 * 8; // = 144 (ri_diskio_bytesread)
+const DISKIO_WRITE_OFFSET: usize = 16 + 17 * 8; // = 152 (ri_diskio_byteswritten)
+const PHYS_FOOTPRINT_OFFSET: usize = 16 + 7 * 8; // = 72 (ri_phys_footprint)
 const RUSAGE_V4_SIZE: usize = 16 + 35 * 8; // = 296
 
-pub fn read_all_process_energy() -> std::collections::HashMap<i32, (String, u64)> {
+/// Per-process resource data: (name, energy_nj, disk_read, disk_write, phys_mem)
+pub fn read_all_process_energy() -> std::collections::HashMap<i32, (String, u64, u64, u64, u64)> {
     let mut result = std::collections::HashMap::new();
     unsafe {
         let mut pids = vec![0i32; 4096];
@@ -514,14 +518,16 @@ pub fn read_all_process_energy() -> std::collections::HashMap<i32, (String, u64)
                 continue;
             }
 
-            let energy_nj = u64::from_ne_bytes(
-                buf[BILLED_ENERGY_OFFSET..BILLED_ENERGY_OFFSET + 8]
-                    .try_into()
-                    .unwrap_or([0; 8]),
-            );
+            let read_u64 = |off: usize| -> u64 {
+                u64::from_ne_bytes(buf[off..off + 8].try_into().unwrap_or([0; 8]))
+            };
+            let energy_nj = read_u64(BILLED_ENERGY_OFFSET);
             if energy_nj == 0 {
                 continue;
             }
+            let disk_r = read_u64(DISKIO_READ_OFFSET);
+            let disk_w = read_u64(DISKIO_WRITE_OFFSET);
+            let phys_mem = read_u64(PHYS_FOOTPRINT_OFFSET);
 
             name_buf.fill(0);
             proc_name(pid, name_buf.as_mut_ptr(), 256);
@@ -529,7 +535,7 @@ pub fn read_all_process_energy() -> std::collections::HashMap<i32, (String, u64)
                 .to_string_lossy()
                 .into_owned();
 
-            result.insert(pid, (name, energy_nj));
+            result.insert(pid, (name, energy_nj, disk_r, disk_w, phys_mem));
         }
     }
     result
@@ -1131,25 +1137,37 @@ impl Sampler {
             let m = shared.clone();
             handles.push(std::thread::spawn(move || {
                 // (name, last_energy_nj, session_energy_mj, last_delta_nj, last_dt_s, last_seen)
+                // (name, energy_nj, session_mj, delta_nj, dt_s, last_seen, disk_r, disk_w, phys_mem)
                 let mut known: std::collections::HashMap<
                     i32,
-                    (String, u64, f64, u64, f64, Instant),
+                    (String, u64, f64, u64, f64, Instant, u64, u64, u64),
                 > = std::collections::HashMap::new();
                 let mut proc_sma: std::collections::HashMap<i32, crate::sma::TimeSma> =
                     std::collections::HashMap::new();
                 let mut total_sma = crate::sma::TimeSma::new(5.0);
                 loop {
                     let cur = read_all_process_energy();
+                    let net = powermetrics::read_proc_net_counters();
                     let now = Instant::now();
 
-                    for (&pid, (name, energy_nj)) in &cur {
+                    for (&pid, (name, energy_nj, disk_r, disk_w, phys_mem)) in &cur {
                         let energy_nj = *energy_nj;
-                        let entry = known
-                            .entry(pid)
-                            .or_insert_with(|| (name.clone(), energy_nj, 0.0, 0, 0.0, now));
+                        let entry = known.entry(pid).or_insert_with(|| {
+                            (name.clone(), energy_nj, 0.0, 0, 0.0, now, 0u64, 0u64, 0u64)
+                        });
                         // Detect PID reuse: name changed or energy counter reset
                         if entry.0 != *name || energy_nj < entry.1 {
-                            *entry = (name.clone(), energy_nj, 0.0, 0, 0.0, now);
+                            *entry = (
+                                name.clone(),
+                                energy_nj,
+                                0.0,
+                                0,
+                                0.0,
+                                now,
+                                *disk_r,
+                                *disk_w,
+                                *phys_mem,
+                            );
                             continue;
                         }
                         let delta_nj = energy_nj.saturating_sub(entry.1);
@@ -1160,18 +1178,19 @@ impl Sampler {
                         entry.3 = delta_nj;
                         entry.4 = dt_s;
                         entry.5 = now;
+                        entry.6 = *disk_r;
+                        entry.7 = *disk_w;
+                        entry.8 = *phys_mem;
                     }
 
-                    known.retain(|_, (_, _, _, _, _, seen)| {
-                        now.duration_since(*seen).as_secs() < 30
-                    });
+                    known.retain(|_, entry| now.duration_since(entry.5).as_secs() < 30);
 
                     let mut procs: Vec<ProcessPower> = known
                         .iter()
-                        .filter(|(_, (_, _, mj, _, _, _))| *mj > 0.0)
-                        .map(|(&pid, (name, _, session_mj, delta_nj, dt_s, _seen))| {
-                            let raw_power = if *dt_s > 0.01 {
-                                (*delta_nj as f64 / 1e9 / dt_s) as f32
+                        .filter(|(_, entry)| entry.2 > 0.0)
+                        .map(|(&pid, entry)| {
+                            let raw_power = if entry.4 > 0.01 {
+                                (entry.3 as f64 / 1e9 / entry.4) as f32
                             } else {
                                 0.0
                             };
@@ -1181,12 +1200,18 @@ impl Sampler {
                             sma.push(raw_power);
                             let power_w = sma.get();
                             let alive = cur.contains_key(&pid);
+                            let (net_rx, net_tx) = net.get(&pid).copied().unwrap_or((0, 0));
                             ProcessPower {
                                 pid,
-                                name: name.clone(),
+                                name: entry.0.clone(),
                                 power_w,
-                                energy_mj: *session_mj,
+                                energy_mj: entry.2,
                                 alive,
+                                disk_read_bytes: entry.6,
+                                disk_write_bytes: entry.7,
+                                phys_mem_bytes: entry.8,
+                                net_rx_bytes: net_rx,
+                                net_tx_bytes: net_tx,
                             }
                         })
                         .collect();

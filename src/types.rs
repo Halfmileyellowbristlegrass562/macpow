@@ -5,7 +5,7 @@ use serde::Serialize;
 #[command(name = env!("CARGO_PKG_NAME"), version, about = "Apple Silicon Power Monitor TUI")]
 pub struct CliArgs {
     /// Sampling interval in milliseconds
-    #[arg(long, default_value_t = 500)]
+    #[arg(long, default_value_t = 250)]
     pub interval: u64,
 
     /// Output JSON to stdout instead of TUI
@@ -252,4 +252,9 @@ pub struct ProcessPower {
     pub power_w: f32,
     pub energy_mj: f64,
     pub alive: bool,
+    pub disk_read_bytes: u64,
+    pub disk_write_bytes: u64,
+    pub phys_mem_bytes: u64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
 }

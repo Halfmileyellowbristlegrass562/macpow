@@ -26,7 +26,7 @@ Real-time power consumption monitor for Apple Silicon Macs (M1–M5+).
 - **Battery** — voltage, amperage, charge %, time remaining, temperature, drain/charge rate
 - **SSD** — model, interconnect (Apple Fabric/PCIe), power estimation from IORegistry disk counters
 - **Peripherals** — Thunderbolt/PCIe (IOReport measured), Ethernet (link speed, per-interface traffic), WiFi (signal/mode/channel, per-interface traffic), Bluetooth devices with battery levels, USB devices (speed/power/I/O counters)
-- **Per-process energy** — dynamically-sized top processes by session energy (from `proc_pid_rusage`), dead process detection
+- **Per-process energy** — dynamically-sized top processes by session energy (from `proc_pid_rusage`), with per-process disk I/O rates, network traffic (via nettop), RAM footprint, dead process detection
 - **Fans** — RPM and cubic power model per fan
 - **Collapsible tree** — fold/unfold with arrows, `+`/`-` for all
 - **Sparkline charts** — pin any resource with Space, inline 1-line history column at wide terminals
@@ -65,7 +65,7 @@ brew install macpow
 ```
 macpow                    # TUI mode (default)
 macpow --json             # JSON output to stdout
-macpow --interval 1000    # Set sampling interval in ms (default: 500)
+macpow --interval 500     # Set sampling interval in ms (default: 250)
 macpow --dump             # Dump IOReport channel names (diagnostics)
 ```
 
@@ -80,7 +80,7 @@ macpow --dump             # Dump IOReport channel names (diagnostics)
 | `-` | Collapse all nodes |
 | `Space` | Pin/unpin resource chart |
 | `a` | Cycle SMA window: 0s / 5s / 10s |
-| `l` | Cycle UI latency: 500ms / 2s / 5s |
+| `l` | Cycle refresh interval: 250ms / 500ms / 1s / 2s |
 | `r` | Reset all totals and min/max |
 | `PgUp` / `PgDn` | Scroll by 10 rows |
 | `Home` | Jump to top |
@@ -126,6 +126,9 @@ Each data source runs in its own thread, updating shared metrics at its own pace
 | System total | SMC PSTR | Direct power rail measurement |
 | Battery | IORegistry | V * I calculation |
 | Per-process | Kernel | `ri_billed_energy` from rusage_info_v4 |
+| Per-process disk I/O | Kernel | `ri_diskio_bytesread/written` from rusage_info_v4 |
+| Per-process memory | Kernel | `ri_phys_footprint` from rusage_info_v4 |
+| Per-process network | nettop | Cumulative bytes per process (~18ms subprocess) |
 | CPU utilization | Mach API | `host_processor_info` tick deltas |
 | Memory | Mach API | `host_statistics64` (active + inactive + wired + compressor pages) |
 | Keyboard | IORegistry PWM | Duty cycle * 0.5W max |
