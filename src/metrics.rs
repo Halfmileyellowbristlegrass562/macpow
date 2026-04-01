@@ -1136,8 +1136,8 @@ impl Sampler {
         {
             let m = shared.clone();
             handles.push(std::thread::spawn(move || {
-                // (name, last_energy_nj, session_energy_mj, last_delta_nj, last_dt_s, last_seen)
                 // (name, energy_nj, session_mj, delta_nj, dt_s, last_seen, disk_r, disk_w, phys_mem)
+                #[allow(clippy::type_complexity)]
                 let mut known: std::collections::HashMap<
                     i32,
                     (String, u64, f64, u64, f64, Instant, u64, u64, u64),
