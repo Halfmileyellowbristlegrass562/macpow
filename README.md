@@ -176,8 +176,11 @@ If a new chip isn't detected correctly, run `macpow --dump` to see the raw IORep
 # 1. Bump version
 vim Cargo.toml                        # update version = "X.Y.Z"
 
-# 2. Build to update Cargo.lock
+# 2. Build and verify
 cargo build --release
+cargo fmt --check                     # formatting clean
+cargo clippy --release                # no new warnings in bin
+cargo test                            # all tests pass
 
 # 3. Update Homebrew badge in README.md
 #    Change: homebrew-vX.Y.Z in the badge URL
