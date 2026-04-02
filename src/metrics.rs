@@ -35,14 +35,35 @@ pub const SSD_MAX_ACTIVE_W: f32 = 2.5;
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGMainDisplayID() -> u32;
+    fn CGDisplayPixelsWide(display: u32) -> usize;
+    fn CGDisplayPixelsHigh(display: u32) -> usize;
+    fn CGDisplayScreenSize(display: u32) -> CGSize;
 }
 
-/// Cached DisplayServices function pointer (loaded once via dlopen).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+/// Cached DisplayServices function pointers (loaded once via dlopen).
 static DISPLAY_BRIGHTNESS_FN: std::sync::OnceLock<
+    Option<unsafe extern "C" fn(u32, *mut f32) -> i32>,
+> = std::sync::OnceLock::new();
+static DISPLAY_LINEAR_BRIGHTNESS_FN: std::sync::OnceLock<
     Option<unsafe extern "C" fn(u32, *mut f32) -> i32>,
 > = std::sync::OnceLock::new();
 
 fn load_display_brightness_fn() -> Option<unsafe extern "C" fn(u32, *mut f32) -> i32> {
+    load_display_services_fn(b"DisplayServicesGetBrightness\0")
+}
+
+fn load_display_linear_brightness_fn() -> Option<unsafe extern "C" fn(u32, *mut f32) -> i32> {
+    load_display_services_fn(b"DisplayServicesGetLinearBrightness\0")
+}
+
+fn load_display_services_fn(sym_name: &[u8]) -> Option<unsafe extern "C" fn(u32, *mut f32) -> i32> {
     use std::ffi::CStr;
     unsafe {
         let path = CStr::from_bytes_with_nul_unchecked(
@@ -52,8 +73,8 @@ fn load_display_brightness_fn() -> Option<unsafe extern "C" fn(u32, *mut f32) ->
         if handle.is_null() {
             return None;
         }
-        let sym_name = CStr::from_bytes_with_nul_unchecked(b"DisplayServicesGetBrightness\0");
-        let sym = libc::dlsym(handle, sym_name.as_ptr());
+        let sym_cstr = CStr::from_bytes_with_nul_unchecked(sym_name);
+        let sym = libc::dlsym(handle, sym_cstr.as_ptr());
         if sym.is_null() {
             return None;
         }
@@ -77,6 +98,56 @@ pub fn read_display_brightness() -> Option<f32> {
         } else {
             None
         }
+    }
+}
+
+/// Read linear brightness (0.0–1.0) — proportional to actual light output (nits).
+/// Unlike GetBrightness (perceptual/gamma-corrected), this is linear:
+/// nits ≈ linear_brightness * max_nits_hdr.
+pub fn read_display_linear_brightness() -> Option<f32> {
+    let get_linear =
+        (*DISPLAY_LINEAR_BRIGHTNESS_FN.get_or_init(load_display_linear_brightness_fn))?;
+    unsafe {
+        let display = CGMainDisplayID();
+        let mut lbr: f32 = 0.0;
+        let ret = get_linear(display, &mut lbr);
+        if ret == 0 {
+            Some(lbr.max(0.0))
+        } else {
+            None
+        }
+    }
+}
+
+/// Read EDR (Extended Dynamic Range) headroom via NSScreen in a subprocess.
+/// Each subprocess gets fresh NSScreen state (not cached like in-process).
+/// Returns the ratio of peak HDR brightness to current SDR brightness.
+/// EDR > 8.0 = XDR mode, 1.0-8.0 = SDR mode on XDR panel, 1.0 = non-XDR.
+/// ~370ms per call; should be called infrequently (every few seconds).
+pub fn read_edr_headroom() -> f32 {
+    let output = std::process::Command::new("python3")
+        .args([
+            "-c",
+            r#"
+import ctypes,ctypes.util
+ctypes.CDLL('/System/Library/Frameworks/AppKit.framework/AppKit')
+o=ctypes.CDLL(ctypes.util.find_library('objc'))
+o.objc_getClass.restype=ctypes.c_void_p;o.objc_getClass.argtypes=[ctypes.c_char_p]
+o.sel_registerName.restype=ctypes.c_void_p;o.sel_registerName.argtypes=[ctypes.c_char_p]
+m=ctypes.CFUNCTYPE(ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p)(ctypes.cast(o.objc_msgSend,ctypes.c_void_p).value)
+f=ctypes.CFUNCTYPE(ctypes.c_double,ctypes.c_void_p,ctypes.c_void_p)(ctypes.cast(o.objc_msgSend,ctypes.c_void_p).value)
+m(o.objc_getClass(b'NSApplication'),o.sel_registerName(b'sharedApplication'))
+s=m(o.objc_getClass(b'NSScreen'),o.sel_registerName(b'mainScreen'))
+print(f(s,o.sel_registerName(b'maximumPotentialExtendedDynamicRangeColorComponentValue')))
+"#,
+        ])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout);
+            s.trim().parse::<f32>().unwrap_or(1.0)
+        }
+        _ => 1.0,
     }
 }
 
@@ -161,6 +232,54 @@ fn read_backlight_max_current_ma() -> f32 {
         cf_utils::cf_release(props as _);
 
         max_ua as f32 / 1000.0
+    }
+}
+
+/// Read real brightness and nits from AppleARMBacklight IODisplayParameters.
+/// Returns (brightness_value, brightness_max, millinits_value, millinits_max).
+/// More accurate than DisplayServicesGetBrightness: shows real nits after
+/// auto-brightness and Apple's SDR/HDR software clamp.
+pub fn read_backlight_brightness() -> Option<(i64, i64, i64, i64)> {
+    unsafe {
+        let matching = IOServiceMatching(b"AppleARMBacklight\0".as_ptr() as *const i8);
+        if matching.is_null() {
+            return None;
+        }
+        let mut iter: u32 = 0;
+        if IOServiceGetMatchingServices(0, matching, &mut iter) != 0 {
+            return None;
+        }
+        let service = IOIteratorNext(iter);
+        if service == 0 {
+            IOObjectRelease(iter);
+            return None;
+        }
+        let mut props = std::ptr::null_mut();
+        let kr = IORegistryEntryCreateCFProperties(service, &mut props, std::ptr::null(), 0);
+        IOObjectRelease(service);
+        IOObjectRelease(iter);
+        if kr != 0 || props.is_null() {
+            return None;
+        }
+        let dict = props as core_foundation_sys::dictionary::CFDictionaryRef;
+        let params = cf_utils::cfdict_get(dict, "IODisplayParameters");
+        if params.is_null() {
+            cf_utils::cf_release(props as _);
+            return None;
+        }
+        let br = cf_utils::cfdict_get(params as _, "brightness");
+        let mn = cf_utils::cfdict_get(params as _, "BrightnessMilliNits");
+        let result = if !br.is_null() && !mn.is_null() {
+            let br_val = cf_utils::cfdict_get_i64(br as _, "value").unwrap_or(0);
+            let br_max = cf_utils::cfdict_get_i64(br as _, "max").unwrap_or(1);
+            let mn_val = cf_utils::cfdict_get_i64(mn as _, "value").unwrap_or(0);
+            let mn_max = cf_utils::cfdict_get_i64(mn as _, "max").unwrap_or(1);
+            Some((br_val, br_max, mn_val, mn_max))
+        } else {
+            None
+        };
+        cf_utils::cf_release(props as _);
+        result
     }
 }
 
@@ -948,13 +1067,15 @@ impl Sampler {
             let cal_max_ma = read_backlight_max_current_ma();
             handles.push(std::thread::spawn(move || loop {
                 let brightness = read_display_brightness();
+                let linear_br = read_display_linear_brightness();
                 let backlight_current = read_backlight_current();
                 if let Ok(mut mg) = m.lock() {
                     if let Some(br) = brightness {
-                        mg.display.brightness_pct = br * 100.0;
-                        mg.display.nits = br * max_nits;
-                        mg.display.max_nits = max_nits;
                         mg.display.available = true;
+                        mg.display.brightness_pct = br * 100.0;
+                        mg.display.max_nits = max_nits;
+                        mg.display.nits = linear_br.unwrap_or(br) * max_nits;
+                        // Power from backlight current or linear estimate
                         mg.display.estimated_power_w =
                             if let Some((cur_ua, max_ua)) = backlight_current {
                                 if max_ua > 0 {
@@ -967,6 +1088,12 @@ impl Sampler {
                             } else {
                                 br * MAX_DISPLAY_W
                             };
+                        let display = unsafe { CGMainDisplayID() };
+                        mg.display.width_px = unsafe { CGDisplayPixelsWide(display) } as u32;
+                        mg.display.height_px = unsafe { CGDisplayPixelsHigh(display) } as u32;
+                        let size_mm = unsafe { CGDisplayScreenSize(display) };
+                        let diag_mm = (size_mm.width.powi(2) + size_mm.height.powi(2)).sqrt();
+                        mg.display.diagonal_inches = (diag_mm / 25.4 * 10.0).round() as f32 / 10.0;
                     } else {
                         mg.display.brightness_pct = 0.0;
                         mg.display.estimated_power_w = 0.0;
@@ -975,6 +1102,18 @@ impl Sampler {
                     }
                 }
                 std::thread::sleep(dt);
+            }));
+        }
+
+        // ── Display EDR headroom (subprocess, every 5s) ─────────────────
+        {
+            let m = shared.clone();
+            handles.push(std::thread::spawn(move || loop {
+                let edr = read_edr_headroom();
+                if let Ok(mut mg) = m.lock() {
+                    mg.display.edr_headroom = edr;
+                }
+                std::thread::sleep(Duration::from_secs(5));
             }));
         }
 

@@ -1707,16 +1707,26 @@ impl App {
             };
             let disp_w = bl_w + s.display_soc.get() + s.display_ext.get();
             let disp_wh = w.backlight + w.display_soc + w.display_ext;
-            let name = if m.display.available {
-                if m.display.nits > 0.0 {
-                    format!(
-                        "Display ({:.0}% brightness, {:.0}/{:.0} nits)",
-                        m.display.brightness_pct, m.display.nits, m.display.max_nits
-                    )
-                } else if m.display.brightness_pct > 0.0 {
-                    format!("Display ({:.0}% brightness)", m.display.brightness_pct)
+            let size_str = if m.display.diagonal_inches > 0.0 {
+                let mode = if m.display.edr_headroom > 8.0 {
+                    " XDR"
+                } else if m.display.edr_headroom > 1.0 {
+                    " SDR"
                 } else {
-                    "Display (0% brightness)".into()
+                    ""
+                };
+                format!(" {:.0}\"{}", m.display.diagonal_inches, mode)
+            } else {
+                String::new()
+            };
+            let name = if m.display.available {
+                if m.display.brightness_pct > 0.0 {
+                    format!(
+                        "Display{} ({:.0}% brightness)",
+                        size_str, m.display.brightness_pct
+                    )
+                } else {
+                    format!("Display{} (0% brightness)", size_str)
                 }
             } else {
                 "Display (off)".into()

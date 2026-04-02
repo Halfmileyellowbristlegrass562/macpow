@@ -152,6 +152,10 @@ pub struct DisplayInfo {
     pub max_nits: f32,
     pub estimated_power_w: f32,
     pub available: bool,
+    pub width_px: u32,
+    pub height_px: u32,
+    pub diagonal_inches: f32,
+    pub edr_headroom: f32,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
