@@ -121,7 +121,16 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, "", "", style, pinned,
+            key,
+            parent,
+            prefix,
+            label,
+            watts,
+            wh,
+            "",
+            "",
+            style,
+            pinned,
             PowerPrefix::Exact,
         )
     }
@@ -138,7 +147,16 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, "", "", style, pinned,
+            key,
+            parent,
+            prefix,
+            label,
+            watts,
+            wh,
+            "",
+            "",
+            style,
+            pinned,
             PowerPrefix::Estimated,
         )
     }
@@ -155,7 +173,16 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, "", "", style, pinned,
+            key,
+            parent,
+            prefix,
+            label,
+            watts,
+            wh,
+            "",
+            "",
+            style,
+            pinned,
             PowerPrefix::MaxBound,
         )
     }
@@ -174,7 +201,16 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, freq, temp, style, pinned,
+            key,
+            parent,
+            prefix,
+            label,
+            watts,
+            wh,
+            freq,
+            temp,
+            style,
+            pinned,
             PowerPrefix::Exact,
         )
     }
@@ -193,7 +229,16 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, freq, temp, style, pinned,
+            key,
+            parent,
+            prefix,
+            label,
+            watts,
+            wh,
+            freq,
+            temp,
+            style,
+            pinned,
             PowerPrefix::Estimated,
         )
     }
@@ -610,9 +655,8 @@ impl App {
             self.usb_prev_bytes.resize(m.usb_devices.len(), (0, 0));
             let port_power = assign_usb_port_power(&m.usb_power_per_port, &m.usb_devices);
             for (i, d) in m.usb_devices.iter().enumerate() {
-                let watts = port_power[i]
-                    .unwrap_or(d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0)
-                    as f64;
+                let watts =
+                    port_power[i].unwrap_or(d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0) as f64;
                 self.usb_wh[i] += watts * dt_h;
                 let (prev_r, prev_w) = self.usb_prev_bytes[i];
                 if (prev_r > 0 || prev_w > 0) && dt_s > 0.001 {
@@ -2228,10 +2272,7 @@ impl App {
                 if d.parent_location_id == 0 {
                     top_level.push(i);
                 } else {
-                    children_of
-                        .entry(d.parent_location_id)
-                        .or_default()
-                        .push(i);
+                    children_of.entry(d.parent_location_id).or_default().push(i);
                 }
             }
 
