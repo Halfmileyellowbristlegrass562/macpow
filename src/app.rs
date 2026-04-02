@@ -85,6 +85,13 @@ fn fmt_freq(mhz: f32) -> String {
 
 // ── TreeRow: pure data for one row ──────────────────────────────────────────
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PowerPrefix {
+    Exact,
+    Estimated,
+    MaxBound,
+}
+
 struct TreeRow {
     prefix: String,
     label: String,
@@ -114,7 +121,8 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, "", "", style, pinned, false,
+            key, parent, prefix, label, watts, wh, "", "", style, pinned,
+            PowerPrefix::Exact,
         )
     }
 
@@ -130,7 +138,25 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, "", "", style, pinned, true,
+            key, parent, prefix, label, watts, wh, "", "", style, pinned,
+            PowerPrefix::Estimated,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pw_max(
+        key: &'static str,
+        parent: Option<&'static str>,
+        prefix: &str,
+        label: &str,
+        watts: f32,
+        wh: f64,
+        style: Style,
+        pinned: bool,
+    ) -> Self {
+        Self::pw_inner(
+            key, parent, prefix, label, watts, wh, "", "", style, pinned,
+            PowerPrefix::MaxBound,
         )
     }
 
@@ -148,7 +174,8 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, freq, temp, style, pinned, false,
+            key, parent, prefix, label, watts, wh, freq, temp, style, pinned,
+            PowerPrefix::Exact,
         )
     }
 
@@ -166,7 +193,8 @@ impl TreeRow {
         pinned: bool,
     ) -> Self {
         Self::pw_inner(
-            key, parent, prefix, label, watts, wh, freq, temp, style, pinned, true,
+            key, parent, prefix, label, watts, wh, freq, temp, style, pinned,
+            PowerPrefix::Estimated,
         )
     }
 
@@ -182,19 +210,24 @@ impl TreeRow {
         temp: &str,
         style: Style,
         pinned: bool,
-        estimated: bool,
+        power_prefix: PowerPrefix,
     ) -> Self {
         let w = watts + 0.0;
-        let current = if estimated {
-            format!("≈{:.3} W", w)
-        } else {
-            format!("{:>7.3} W", w)
+        let current = match power_prefix {
+            PowerPrefix::Exact => format!("{:>7.3} W", w),
+            PowerPrefix::Estimated => format!("≈{:.3} W", w),
+            PowerPrefix::MaxBound => format!("≤{:.3} W", w),
         };
-        let total = if estimated {
-            let s = fmt_wh(wh);
-            format!("≈{}", s.trim_start())
-        } else {
-            fmt_wh(wh)
+        let total = match power_prefix {
+            PowerPrefix::Exact => fmt_wh(wh),
+            PowerPrefix::Estimated => {
+                let s = fmt_wh(wh);
+                format!("≈{}", s.trim_start())
+            }
+            PowerPrefix::MaxBound => {
+                let s = fmt_wh(wh);
+                format!("≤{}", s.trim_start())
+            }
         };
         Self {
             prefix: prefix.to_string(),
@@ -575,8 +608,11 @@ impl App {
             self.usb_wh.resize(m.usb_devices.len(), 0.0);
             self.usb_rates.resize(m.usb_devices.len(), (0.0, 0.0));
             self.usb_prev_bytes.resize(m.usb_devices.len(), (0, 0));
+            let port_power = assign_usb_port_power(&m.usb_power_per_port, &m.usb_devices);
             for (i, d) in m.usb_devices.iter().enumerate() {
-                let watts = d.power_ma.unwrap_or(0) as f64 * 5.0 / 1000.0;
+                let watts = port_power[i]
+                    .unwrap_or(d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0)
+                    as f64;
                 self.usb_wh[i] += watts * dt_h;
                 let (prev_r, prev_w) = self.usb_prev_bytes[i];
                 if (prev_r > 0 || prev_w > 0) && dt_s > 0.001 {
@@ -664,8 +700,12 @@ impl App {
         for (i, fan) in m.fans.iter().enumerate() {
             self.push_history(fan_key(i), fan.estimated_power_w as f64);
         }
-        for (i, d) in m.usb_devices.iter().enumerate() {
-            self.push_history(usb_key(i), d.power_ma.unwrap_or(0) as f64 * 5.0 / 1000.0);
+        {
+            let pp = assign_usb_port_power(&m.usb_power_per_port, &m.usb_devices);
+            for (i, d) in m.usb_devices.iter().enumerate() {
+                let watts = pp[i].unwrap_or(d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0);
+                self.push_history(usb_key(i), watts as f64);
+            }
         }
         self.push_history(
             "wifi",
@@ -1921,14 +1961,17 @@ impl App {
 
         // ── Peripherals
         let pc = c("peripherals");
-        let has_usb_power_out = m.usb_power_out_w > 0.0;
-        let usb_total_w: f32 = if has_usb_power_out {
-            m.usb_power_out_w
+        let descriptor_sum: f32 = m
+            .usb_devices
+            .iter()
+            .map(|d| d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0)
+            .sum();
+        let (usb_total_w, usb_is_measured) = if m.usb_power_smc_w > 0.0 {
+            (m.usb_power_smc_w, true)
+        } else if m.usb_power_out_w > 0.0 {
+            (m.usb_power_out_w, true)
         } else {
-            m.usb_devices
-                .iter()
-                .map(|d| d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0)
-                .sum()
+            (descriptor_sum, false)
         };
         let usb_total_wh: f64 = self.usb_wh.iter().sum();
         rows.push(TreeRow::pw_est(
@@ -2160,10 +2203,10 @@ impl App {
                 DIM,
             ));
         } else {
-            let usb_row_fn = if has_usb_power_out {
+            let usb_row_fn = if usb_is_measured {
                 TreeRow::pw
             } else {
-                TreeRow::pw_est
+                TreeRow::pw_max
             };
             rows.push(usb_row_fn(
                 "usb",
@@ -2175,29 +2218,45 @@ impl App {
                 Style::default(),
                 pin("usb"),
             ));
+            let pp = assign_usb_port_power(&m.usb_power_per_port, &m.usb_devices);
+
+            // Build children map for hierarchical rendering
+            let mut children_of: std::collections::HashMap<u32, Vec<usize>> =
+                std::collections::HashMap::new();
+            let mut top_level: Vec<usize> = Vec::new();
             for (i, d) in m.usb_devices.iter().enumerate() {
-                let pfx = if i == m.usb_devices.len() - 1 {
-                    format!("{}   └─ ", pc)
+                if d.parent_location_id == 0 {
+                    top_level.push(i);
                 } else {
-                    format!("{}   ├─ ", pc)
-                };
-                let cont = if i == m.usb_devices.len() - 1 {
-                    format!("{}      ", pc)
+                    children_of
+                        .entry(d.parent_location_id)
+                        .or_default()
+                        .push(i);
+                }
+            }
+
+            // DFS stack: (device_index, parent_key, base_continuation, siblings_after)
+            let mut stack: Vec<(usize, &'static str, String, usize)> = Vec::new();
+            for (pos, &i) in top_level.iter().enumerate().rev() {
+                stack.push((i, "usb", format!("{}   ", pc), top_level.len() - 1 - pos));
+            }
+
+            while let Some((i, parent_key, base, siblings_after)) = stack.pop() {
+                let d = &m.usb_devices[i];
+                let is_last = siblings_after == 0;
+                let pfx = if is_last {
+                    format!("{}└─ ", base)
                 } else {
-                    format!("{}   │  ", pc)
+                    format!("{}├─ ", base)
                 };
-                let port_idx = (d.location_id >> 20) & 0xF;
-                let real_power = m
-                    .usb_power_per_port
-                    .iter()
-                    .find(|(idx, _)| *idx == port_idx)
-                    .map(|(_, w)| *w);
-                let (watts, is_measured) = if let Some(rp) = real_power {
-                    if rp > 0.0 {
-                        (rp, true)
-                    } else {
-                        (d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0, false)
-                    }
+                let cont = if is_last {
+                    format!("{}   ", base)
+                } else {
+                    format!("{}│  ", base)
+                };
+
+                let (watts, is_measured) = if let Some(rp) = pp[i] {
+                    (rp, true)
                 } else {
                     (d.power_ma.unwrap_or(0) as f32 * 5.0 / 1000.0, false)
                 };
@@ -2216,11 +2275,11 @@ impl App {
                 let row_fn = if is_measured {
                     TreeRow::pw
                 } else {
-                    TreeRow::pw_est
+                    TreeRow::pw_max
                 };
                 rows.push(row_fn(
                     key,
-                    Some("usb"),
+                    Some(parent_key),
                     &pfx,
                     &format!("{} ({}{})", d.name.trim(), speed_str, pwr_str),
                     watts,
@@ -2228,7 +2287,8 @@ impl App {
                     Style::default(),
                     pin(key),
                 ));
-                // Data counters (children of usb device, collapsed by default)
+
+                // Data counters (collapsed by default)
                 if d.bytes_read > 0 || d.bytes_written > 0 {
                     let (rate_r, rate_w) = self.usb_rates.get(i).copied().unwrap_or((0.0, 0.0));
                     rows.push(TreeRow::info(
@@ -2247,6 +2307,13 @@ impl App {
                         &human_bytes(d.bytes_written as f64),
                         DATA_STYLE,
                     ));
+                }
+
+                // Push children onto stack (reversed so first child is processed first)
+                if let Some(kids) = children_of.get(&d.location_id) {
+                    for (pos, &ci) in kids.iter().enumerate().rev() {
+                        stack.push((ci, key, cont.clone(), kids.len() - 1 - pos));
+                    }
                 }
             }
         }
@@ -2936,6 +3003,66 @@ fn fan_key(index: usize) -> &'static str {
         "fan0", "fan1", "fan2", "fan3", "fan4", "fan5", "fan6", "fan7",
     ];
     KEYS.get(index).copied().unwrap_or("fan0")
+}
+
+/// Assign PowerOutDetails entries to USB devices without duplicates.
+/// Returns one Option<f32> per device. Priority: exact location_id match,
+/// then port_idx_b (upper byte — root hub / controller), then port_idx_a.
+fn assign_usb_port_power(ports: &[UsbPortPower], devices: &[UsbDevice]) -> Vec<Option<f32>> {
+    let mut result = vec![None; devices.len()];
+    if ports.is_empty() {
+        return result;
+    }
+    let mut claimed = vec![false; ports.len()];
+
+    // Pass 1: exact location_id match
+    for (di, dev) in devices.iter().enumerate() {
+        if dev.location_id == 0 {
+            continue;
+        }
+        for (pi, port) in ports.iter().enumerate() {
+            if !claimed[pi] && port.location_id != 0 && port.location_id == dev.location_id {
+                if port.power_w > 0.0 {
+                    result[di] = Some(port.power_w);
+                }
+                claimed[pi] = true;
+                break;
+            }
+        }
+    }
+
+    // Pass 2: match by (controller_id + 1) where controller_id = location_id >> 24.
+    // On Apple Silicon Macs, USB controller IDs are 0-indexed while PowerOutDetails
+    // PortIndex is 1-indexed, so port_index = controller_id + 1.
+    for (di, dev) in devices.iter().enumerate() {
+        if result[di].is_some() || dev.location_id == 0 {
+            continue;
+        }
+        let controller_id = (dev.location_id >> 24) & 0xFF;
+        let expected_port = controller_id + 1;
+        for (pi, port) in ports.iter().enumerate() {
+            if !claimed[pi] && port.port_index == expected_port && port.power_w > 0.0 {
+                result[di] = Some(port.power_w);
+                claimed[pi] = true;
+                break;
+            }
+        }
+    }
+
+    // Pass 4: pair remaining unmatched devices with remaining unclaimed ports
+    let mut unclaimed: Vec<usize> = (0..ports.len())
+        .filter(|pi| !claimed[*pi] && ports[*pi].power_w > 0.0)
+        .collect();
+    for di in 0..devices.len() {
+        if result[di].is_some() || unclaimed.is_empty() {
+            continue;
+        }
+        let pi = unclaimed.remove(0);
+        result[di] = Some(ports[pi].power_w);
+        claimed[pi] = true;
+    }
+
+    result
 }
 
 fn usb_key(index: usize) -> &'static str {

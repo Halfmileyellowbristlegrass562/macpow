@@ -998,6 +998,7 @@ impl Sampler {
                     let backlight_power = smc.read_f32("PDBR").unwrap_or(0.0);
                     let adapter_power = smc.read_f32("PDTR").unwrap_or(0.0);
                     let wifi_power = smc.read_f32("wiPm").unwrap_or(0.0);
+                    let usb_power_smc = smc.read_f32("PUSB").unwrap_or(0.0);
                     let cur_ticks = read_cpu_ticks();
                     let cpu_usage = compute_cpu_usage(&prev_ticks, &cur_ticks);
                     prev_ticks = cur_ticks;
@@ -1012,6 +1013,7 @@ impl Sampler {
                         mg.backlight_power_w = backlight_power;
                         mg.adapter_power_w = adapter_power;
                         mg.wifi_power_w = wifi_power;
+                        mg.usb_power_smc_w = usb_power_smc;
                         mg.mem_used_gb = read_mem_used_gb();
                         mg.cpu_usage_pct = cpu_usage;
                         let (_, gr, gt) = read_gpu_utilization();
@@ -1210,7 +1212,7 @@ impl Sampler {
                 if let Ok(mut mg) = m.lock() {
                     mg.usb_devices = usb;
                     mg.power_assertions = asserts;
-                    mg.usb_power_out_w = usb_ports.iter().map(|(_, w)| w).sum();
+                    mg.usb_power_out_w = usb_ports.iter().map(|p| p.power_w).sum();
                     mg.usb_power_per_port = usb_ports;
                 }
                 std::thread::sleep(dt);

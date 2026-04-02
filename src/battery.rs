@@ -1,6 +1,6 @@
 use crate::cf_utils;
 use crate::iokit_ffi::*;
-use crate::types::{AdapterInfo, BatteryInfo};
+use crate::types::{AdapterInfo, BatteryInfo, UsbPortPower};
 use core_foundation_sys::dictionary::CFDictionaryRef;
 
 pub fn read_battery() -> BatteryInfo {
@@ -143,12 +143,11 @@ unsafe fn read_adapter_inner() -> Option<AdapterInfo> {
 }
 
 /// Read USB power output per port from PowerOutDetails in AppleSmartBattery.
-/// Returns Vec of (port_index, power_w).
-pub fn read_usb_power_out_per_port() -> Vec<(u32, f32)> {
+pub fn read_usb_power_out_per_port() -> Vec<UsbPortPower> {
     unsafe { read_usb_power_per_port_inner().unwrap_or_default() }
 }
 
-unsafe fn read_usb_power_per_port_inner() -> Option<Vec<(u32, f32)>> {
+unsafe fn read_usb_power_per_port_inner() -> Option<Vec<UsbPortPower>> {
     use core_foundation_sys::array::CFArrayRef;
 
     let matching = IOServiceMatching(b"AppleSmartBattery\0".as_ptr() as *const i8);
@@ -185,8 +184,13 @@ unsafe fn read_usb_power_per_port_inner() -> Option<Vec<(u32, f32)>> {
             let watts_mw = cf_utils::cfdict_get_i64(d, "Watts").unwrap_or(0);
             let pd_mw = cf_utils::cfdict_get_i64(d, "PDPowermW").unwrap_or(0);
             let power_mw = if watts_mw > 0 { watts_mw } else { pd_mw };
+            let loc_id = cf_utils::cfdict_get_i64(d, "LocationID").unwrap_or(0) as u32;
             if port_idx >= 0 {
-                ports.push((port_idx as u32, power_mw as f32 / 1000.0));
+                ports.push(UsbPortPower {
+                    port_index: port_idx as u32,
+                    power_w: power_mw as f32 / 1000.0,
+                    location_id: loc_id,
+                });
             }
         }
     }

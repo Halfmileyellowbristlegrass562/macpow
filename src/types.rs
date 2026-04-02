@@ -45,8 +45,9 @@ pub struct Metrics {
     pub backlight_power_w: f32,
     pub adapter_power_w: f32,
     pub wifi_power_w: f32,
+    pub usb_power_smc_w: f32,
     pub usb_power_out_w: f32,
-    pub usb_power_per_port: Vec<(u32, f32)>,
+    pub usb_power_per_port: Vec<UsbPortPower>,
     pub gpu_cores: u32,
     pub dram_gb: u32,
     pub mem_used_gb: f32,
@@ -193,6 +194,13 @@ pub struct DiskInfo {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+pub struct UsbPortPower {
+    pub port_index: u32,
+    pub power_w: f32,
+    pub location_id: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct UsbDevice {
     pub name: String,
     pub vendor_id: u32,
@@ -200,6 +208,7 @@ pub struct UsbDevice {
     pub power_ma: Option<u32>,
     pub speed: u32,
     pub location_id: u32,
+    pub parent_location_id: u32,
     pub bytes_read: u64,
     pub bytes_written: u64,
 }

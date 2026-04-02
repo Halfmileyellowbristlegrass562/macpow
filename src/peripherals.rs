@@ -22,12 +22,21 @@ unsafe fn list_usb_inner() -> Option<Vec<UsbDevice>> {
         return None;
     }
 
-    let mut devices = Vec::new();
+    // Collect all entry handles first to avoid iterator invalidation
+    // from find_storage_stats child-tree walks.
+    let mut entries = Vec::new();
     loop {
         let entry = IOIteratorNext(iter);
         if entry == 0 {
             break;
         }
+        entries.push(entry);
+    }
+    IOObjectRelease(iter);
+
+    let mut devices = Vec::new();
+    for entry in &entries {
+        let entry = *entry;
 
         let mut name_buf = [0i8; 128];
         let name = if IORegistryEntryGetName(entry, name_buf.as_mut_ptr()) == 0 {
@@ -73,11 +82,42 @@ unsafe fn list_usb_inner() -> Option<Vec<UsbDevice>> {
             location_id,
             bytes_read,
             bytes_written,
+            parent_location_id: 0,
         });
     }
 
-    IOObjectRelease(iter);
+    compute_usb_parents(&mut devices);
     Some(devices)
+}
+
+/// Compute parent-child relationships from USB locationID topology.
+/// locationID encodes the port path: upper nibbles are parent ports,
+/// each additional non-zero nibble adds a hub level.
+/// E.g. 0x01100000 (hub) is parent of 0x01110000 and 0x01120000.
+fn compute_usb_parents(devices: &mut [UsbDevice]) {
+    let locs: Vec<u32> = devices.iter().map(|d| d.location_id).collect();
+    for i in 0..devices.len() {
+        let loc = devices[i].location_id;
+        if loc == 0 {
+            continue;
+        }
+        // Scan nibbles from bottom (shift=0) upward to find the lowest non-zero
+        // nibble in the port path, then clear it to get the parent locationID.
+        // E.g. 0x01110000 → lowest non-zero nibble at shift=16 → parent 0x01100000
+        let mut shift = 0u32;
+        while shift <= 28 {
+            if (loc >> shift) & 0xF != 0 {
+                break;
+            }
+            shift += 4;
+        }
+        if shift <= 24 {
+            let parent_loc = loc & !(0xF << shift);
+            if parent_loc != 0 && locs.contains(&parent_loc) {
+                devices[i].parent_location_id = parent_loc;
+            }
+        }
+    }
 }
 
 /// Walk child tree of a USB device to find IOBlockStorageDriver Statistics.
