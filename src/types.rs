@@ -1,21 +1,4 @@
-use clap::Parser;
 use serde::Serialize;
-
-#[derive(Parser, Debug)]
-#[command(name = env!("CARGO_PKG_NAME"), version, about = "Apple Silicon Power Monitor TUI")]
-pub struct CliArgs {
-    /// Sampling interval in milliseconds
-    #[arg(long, default_value_t = 250)]
-    pub interval: u64,
-
-    /// Output JSON to stdout instead of TUI
-    #[arg(long)]
-    pub json: bool,
-
-    /// Dump all IOReport channel names and exit (for diagnostics)
-    #[arg(long)]
-    pub dump: bool,
-}
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Metrics {

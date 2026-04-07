@@ -74,3 +74,33 @@ impl TimeSma {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_sma_returns_zero() {
+        let sma = TimeSma::new(5.0);
+        assert_eq!(sma.get(), 0.0);
+    }
+
+    #[test]
+    fn zero_window_returns_latest_value() {
+        let mut sma = TimeSma::new(0.0);
+        sma.push(1.0);
+        sma.push(3.5);
+        assert_eq!(sma.get(), 3.5);
+    }
+
+    #[test]
+    fn moving_average_tracks_recent_values() {
+        let mut sma = TimeSma::new(1.0);
+        sma.push(10.0);
+        std::thread::sleep(Duration::from_millis(40));
+        sma.push(20.0);
+        std::thread::sleep(Duration::from_millis(40));
+        let avg = sma.get();
+        assert!(avg > 10.0 && avg < 20.0, "unexpected SMA value: {}", avg);
+    }
+}

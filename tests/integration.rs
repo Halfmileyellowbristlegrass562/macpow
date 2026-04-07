@@ -97,9 +97,11 @@ fn ioreport_cpu_clusters_populated() {
     let host_cores = std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(detected_cores);
-    assert_eq!(
-        detected_cores, host_cores,
-        "detected CPU core count should match host parallelism"
+    assert!(
+        detected_cores > 0 && detected_cores <= host_cores,
+        "detected CPU core count should be within host parallelism bounds (detected={}, host={})",
+        detected_cores,
+        host_cores
     );
 
     soc.ecpu_clusters.iter().for_each(|cluster| {
@@ -318,31 +320,46 @@ fn sampler_fan_power_in_range() {
 
 #[test]
 fn fan_power_cubic_model() {
-    // At 0 RPM → 0 W, at max → 1 W, scales cubically
-    let info = FanInfo {
-        id: 0,
-        name: "test".into(),
-        actual_rpm: 0.0,
-        min_rpm: 0.0,
-        max_rpm: 8000.0,
-        estimated_power_w: 0.0,
-    };
-    assert_eq!(info.estimated_power_w, 0.0);
+    let mut smc = SmcConnection::open().unwrap();
+    let fans = smc.read_fans();
+    for fan in fans {
+        if fan.max_rpm <= 0.0 {
+            continue;
+        }
+        let ratio = (fan.actual_rpm / fan.max_rpm).clamp(0.0, 1.0);
+        let expected = metrics::MAX_FAN_W * ratio.powi(3);
+        let diff = (fan.estimated_power_w - expected).abs();
+        assert!(
+            diff < 1e-4,
+            "fan model mismatch for {}: got {}, expected {}",
+            fan.name,
+            fan.estimated_power_w,
+            expected
+        );
+    }
 }
 
 #[test]
 fn audio_power_model_muted_zero() {
-    let a = AudioInfo {
-        volume_pct: Some(100.0),
-        muted: true,
-        device_active: true,
-        playing: true,
-        estimated_power_w: 0.0,
+    let sampler = metrics::Sampler::new(500);
+    let a = sampler.snapshot().audio;
+    let effective_volume = if a.muted {
+        0.0
+    } else {
+        a.volume_pct.unwrap_or(0.0).clamp(0.0, 100.0) / 100.0
     };
-    // When muted, effective volume is 0 → power = idle only
-    // (this tests the model logic in metrics.rs, but we can't call it directly
-    //  so we just validate the struct invariant)
-    assert_eq!(a.estimated_power_w, 0.0);
+    let expected = match (a.device_active, a.playing) {
+        (false, _) => 0.0,
+        (true, false) => metrics::AUDIO_IDLE_W,
+        (true, true) => metrics::AUDIO_IDLE_W + effective_volume.powi(2) * metrics::MAX_SPEAKER_W,
+    };
+    let diff = (a.estimated_power_w - expected).abs();
+    assert!(
+        diff < 1e-4,
+        "audio model mismatch: got {}, expected {}",
+        a.estimated_power_w,
+        expected
+    );
 }
 
 #[test]

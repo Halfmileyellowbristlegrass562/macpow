@@ -1,4 +1,5 @@
 use macpow::sma::TimeSma;
+use macpow::process_utils::command_output_timeout;
 use macpow::types::*;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -3392,16 +3393,18 @@ fn proc_key(cache: &mut std::collections::HashMap<i32, &'static str>, pid: i32) 
 }
 
 fn read_machine_name() -> String {
-    let chip = std::process::Command::new("sysctl")
-        .args(["-n", "machdep.cpu.brand_string"])
-        .output()
-        .ok()
+    let chip = command_output_timeout(
+        "sysctl",
+        &["-n", "machdep.cpu.brand_string"],
+        std::time::Duration::from_millis(500),
+    )
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty());
-    let model = std::process::Command::new("sysctl")
-        .args(["-n", "hw.model"])
-        .output()
-        .ok()
+    let model = command_output_timeout(
+        "sysctl",
+        &["-n", "hw.model"],
+        std::time::Duration::from_millis(500),
+    )
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty());
     match (chip, model) {

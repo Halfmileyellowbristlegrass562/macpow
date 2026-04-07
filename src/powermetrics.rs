@@ -1,3 +1,4 @@
+use crate::process_utils::command_output_timeout;
 use crate::types::{DiskInfo, NetworkInfo};
 use std::collections::HashMap;
 
@@ -173,11 +174,12 @@ pub type ProcNetCounters = HashMap<i32, (u64, u64)>; // pid → (rx_bytes, tx_by
 /// Read per-process cumulative network bytes via `nettop -P -n -L 1 -x`.
 /// Returns in ~18ms. Parses CSV: "name.pid,,iface,state,bytes_in,bytes_out,..."
 pub fn read_proc_net_counters() -> ProcNetCounters {
-    let output = match std::process::Command::new("nettop")
-        .args(["-P", "-n", "-L", "1", "-x"])
-        .output()
-    {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+    let output = match command_output_timeout(
+        "nettop",
+        &["-P", "-n", "-L", "1", "-x"],
+        std::time::Duration::from_millis(1000),
+    ) {
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         _ => return HashMap::new(),
     };
 
@@ -188,8 +190,15 @@ pub fn read_proc_net_counters() -> ProcNetCounters {
             continue;
         }
         // Format: time,name.pid,iface,state,bytes_in,bytes_out,...
-        let name_pid = cols[1];
-        let pid: i32 = match name_pid.rsplit('.').next().and_then(|s| s.parse().ok()) {
+        let name_pid = cols[1].trim();
+        let (name, pid_suffix) = match name_pid.rsplit_once('.') {
+            Some(parts) => parts,
+            None => continue,
+        };
+        if name.is_empty() || !pid_suffix.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let pid: i32 = match pid_suffix.parse().ok() {
             Some(p) if p > 0 => p,
             _ => continue,
         };
@@ -202,4 +211,50 @@ pub fn read_proc_net_counters() -> ProcNetCounters {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_net_rates_aggregates_interfaces() {
+        let prev = HashMap::from([
+            ("en0".to_string(), (100u64, 200u64)),
+            ("en1".to_string(), (50u64, 100u64)),
+        ]);
+        let cur = HashMap::from([
+            ("en0".to_string(), (300u64, 500u64)),
+            ("en1".to_string(), (100u64, 160u64)),
+        ]);
+        let rates = compute_net_rates(&prev, &cur, 2.0);
+        assert_eq!(rates.bytes_in_per_sec, 125.0);
+        assert_eq!(rates.bytes_out_per_sec, 180.0);
+    }
+
+    #[test]
+    fn compute_net_rates_iface_filters_target_only() {
+        let prev = HashMap::from([
+            ("en0".to_string(), (100u64, 200u64)),
+            ("en1".to_string(), (10u64, 20u64)),
+        ]);
+        let cur = HashMap::from([
+            ("en0".to_string(), (160u64, 260u64)),
+            ("en1".to_string(), (110u64, 220u64)),
+        ]);
+        let rates = compute_net_rates_iface(&prev, &cur, 2.0, "en0");
+        assert_eq!(rates.bytes_in_per_sec, 30.0);
+        assert_eq!(rates.bytes_out_per_sec, 30.0);
+    }
+
+    #[test]
+    fn compute_disk_rates_handles_regular_and_zero_delta() {
+        let rates = compute_disk_rates(&(100, 200), &(300, 500), 2.0);
+        assert_eq!(rates.read_bytes_per_sec, 100.0);
+        assert_eq!(rates.write_bytes_per_sec, 150.0);
+
+        let zero = compute_disk_rates(&(300, 500), &(100, 200), 2.0);
+        assert_eq!(zero.read_bytes_per_sec, 0.0);
+        assert_eq!(zero.write_bytes_per_sec, 0.0);
+    }
 }

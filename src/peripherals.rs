@@ -1,5 +1,6 @@
 use crate::cf_utils;
 use crate::iokit_ffi::*;
+use crate::process_utils::command_output_timeout;
 use crate::types::{BluetoothDevice, EthernetInfo, PowerAssertion, UsbDevice, WifiInfo};
 use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::dictionary::{CFDictionaryRef, CFMutableDictionaryRef};
@@ -322,10 +323,11 @@ fn phy_mode_str(mode: i64) -> &'static str {
 }
 
 fn read_wifi_ssid_ipconfig(iface_name: &str) -> Option<String> {
-    let output = std::process::Command::new("ipconfig")
-        .args(["getsummary", iface_name])
-        .output()
-        .ok()?;
+    let output = command_output_timeout(
+        "ipconfig",
+        &["getsummary", iface_name],
+        std::time::Duration::from_millis(1000),
+    )?;
     let text = String::from_utf8_lossy(&output.stdout);
     for line in text.lines() {
         let trimmed = line.trim();
@@ -443,11 +445,12 @@ pub fn read_wifi_info() -> WifiInfo {
 // ── Bluetooth devices via pmset -g accps ─────────────────────────────────────
 
 pub fn read_bluetooth_devices() -> Vec<BluetoothDevice> {
-    let output = match std::process::Command::new("pmset")
-        .args(["-g", "accps"])
-        .output()
-    {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+    let output = match command_output_timeout(
+        "pmset",
+        &["-g", "accps"],
+        std::time::Duration::from_millis(1000),
+    ) {
+        Some(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         _ => return Vec::new(),
     };
 

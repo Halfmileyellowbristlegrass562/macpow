@@ -74,13 +74,6 @@ extern "C" {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn cfstr_raw(s: &str) -> CFStringRef {
-    let cf = CFString::new(s);
-    let raw = cf.as_concrete_TypeRef();
-    std::mem::forget(cf); // caller or IOReport takes ownership
-    raw
-}
-
 /// Compute watts from an IOReport energy delta sample.
 /// `val`      – integer energy from `IOReportSimpleGetIntegerValue`
 /// `unit`     – unit label from the channel ("mJ", "uJ", "nJ")
@@ -474,8 +467,13 @@ impl IOReportSampler {
             let mut merged: CFDictionaryRef = ptr::null();
 
             for &(group, subgroup) in channels {
-                let g = cfstr_raw(group);
-                let sg = subgroup.map(cfstr_raw).unwrap_or(ptr::null());
+                let g_cf = CFString::new(group);
+                let g = g_cf.as_concrete_TypeRef();
+                let sg_cf = subgroup.map(CFString::new);
+                let sg = sg_cf
+                    .as_ref()
+                    .map(|s| s.as_concrete_TypeRef())
+                    .unwrap_or(ptr::null());
                 let ch = IOReportCopyChannelsInGroup(g, sg, 0, 0, 0);
                 if ch.is_null() {
                     continue;
@@ -494,11 +492,17 @@ impl IOReportSampler {
 
             let desired = cf_utils::cfdict_mutable_copy(merged);
             cf_utils::cf_release(merged as _);
+            if desired.is_null() {
+                bail!("IOReport: failed to create mutable channels copy");
+            }
 
             let mut subd: CFMutableDictionaryRef = ptr::null_mut();
             let sub = IOReportCreateSubscription(ptr::null(), desired, &mut subd, 0, ptr::null());
+            cf_utils::cf_release(desired as _);
 
             if sub.is_null() || subd.is_null() {
+                cf_utils::cf_release(sub as _);
+                cf_utils::cf_release(subd as _);
                 bail!("IOReport: subscription failed");
             }
 
@@ -874,6 +878,15 @@ impl IOReportSampler {
     }
 }
 
+impl Drop for IOReportSampler {
+    fn drop(&mut self) {
+        unsafe {
+            cf_utils::cf_release(self.subscription as _);
+            cf_utils::cf_release(self.subscribed_channels as _);
+        }
+    }
+}
+
 /// An absolute IOReport snapshot at a point in time.
 pub struct Sample {
     inner: CFDictionaryRef,
@@ -969,5 +982,20 @@ mod tests {
             Some((CpuKind::Performance, 1))
         );
         assert_eq!(parse_energy_core_key("PACC1_CPU5_SRAM"), None);
+    }
+
+    #[test]
+    fn converts_energy_delta_to_watts_for_known_units() {
+        let mj = energy_to_watts(1000, "mJ", 1000);
+        let uj = energy_to_watts(1_000_000, "uJ", 1000);
+        let nj = energy_to_watts(1_000_000_000, "nJ", 1000);
+        assert!((mj - 1.0).abs() < 1e-6);
+        assert!((uj - 1.0).abs() < 1e-6);
+        assert!((nj - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn converts_energy_delta_unknown_unit_to_zero() {
+        assert_eq!(energy_to_watts(123, "J", 1000), 0.0);
     }
 }

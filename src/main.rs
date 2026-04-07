@@ -1,7 +1,7 @@
 mod app;
 
 use macpow::metrics::Sampler;
-use macpow::types::{CliArgs, Metrics};
+use macpow::types::Metrics;
 
 use anyhow::Result;
 use app::App;
@@ -16,6 +16,22 @@ use ratatui::Terminal;
 use std::io::stdout;
 use std::sync::mpsc;
 use std::time::Duration;
+
+#[derive(Parser, Debug)]
+#[command(name = env!("CARGO_PKG_NAME"), version, about = "Apple Silicon Power Monitor TUI")]
+struct CliArgs {
+    /// Sampling interval in milliseconds
+    #[arg(long, default_value_t = 250)]
+    interval: u64,
+
+    /// Output JSON to stdout instead of TUI
+    #[arg(long)]
+    json: bool,
+
+    /// Dump all IOReport channel names and exit (for diagnostics)
+    #[arg(long)]
+    dump: bool,
+}
 
 fn main() -> Result<()> {
     let args = CliArgs::parse();

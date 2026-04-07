@@ -4,6 +4,7 @@ use crate::iokit_ffi::*;
 use crate::ioreport::IOReportSampler;
 use crate::peripherals;
 use crate::powermetrics;
+use crate::process_utils::command_output_timeout;
 use crate::smc::SmcConnection;
 use crate::types::*;
 use core_foundation_sys::dictionary::{CFDictionaryRef, CFMutableDictionaryRef};
@@ -125,8 +126,9 @@ pub fn read_display_linear_brightness() -> Option<f32> {
 /// EDR > 8.0 = XDR mode, 1.0-8.0 = SDR mode on XDR panel, 1.0 = non-XDR.
 /// ~370ms per call; should be called infrequently (every few seconds).
 pub fn read_edr_headroom() -> f32 {
-    let output = std::process::Command::new("python3")
-        .args([
+    let output = command_output_timeout(
+        "python3",
+        &[
             "-c",
             r#"
 import ctypes,ctypes.util
@@ -140,10 +142,11 @@ m(o.objc_getClass(b'NSApplication'),o.sel_registerName(b'sharedApplication'))
 s=m(o.objc_getClass(b'NSScreen'),o.sel_registerName(b'mainScreen'))
 print(f(s,o.sel_registerName(b'maximumPotentialExtendedDynamicRangeColorComponentValue')))
 "#,
-        ])
-        .output();
+        ],
+        Duration::from_millis(1000),
+    );
     match output {
-        Ok(o) if o.status.success() => {
+        Some(o) if o.status.success() => {
             let s = String::from_utf8_lossy(&o.stdout);
             s.trim().parse::<f32>().unwrap_or(1.0)
         }
@@ -581,14 +584,21 @@ fn read_audio_info(assertions: &[crate::types::PowerAssertion]) -> AudioInfo {
 // ── GPU core count from IORegistry ───────────────────────────────────────────
 
 fn read_gpu_core_count() -> u32 {
-    std::process::Command::new("sysctl")
-        .args(["-n", "machdep.gpu.core_count"])
-        .output().ok()
+    command_output_timeout(
+        "sysctl",
+        &["-n", "machdep.gpu.core_count"],
+        Duration::from_millis(500),
+    )
         .and_then(|o| std::str::from_utf8(&o.stdout).ok()?.trim().parse().ok())
         .or_else(|| {
-            std::process::Command::new("bash")
-                .args(["-c", r#"ioreg -l 2>/dev/null | grep -oE '"gpu-core-count" = [0-9]+' | head -1 | grep -oE '[0-9]+$'"#])
-                .output().ok()
+            command_output_timeout(
+                "bash",
+                &[
+                    "-c",
+                    r#"ioreg -l 2>/dev/null | grep -oE '"gpu-core-count" = [0-9]+' | head -1 | grep -oE '[0-9]+$'"#,
+                ],
+                Duration::from_millis(1000),
+            )
                 .and_then(|o| std::str::from_utf8(&o.stdout).ok()?.trim().parse().ok())
         })
         .unwrap_or(0)
@@ -661,10 +671,7 @@ pub fn read_all_process_energy() -> std::collections::HashMap<i32, (String, u64,
 }
 
 fn read_dram_gb() -> u32 {
-    std::process::Command::new("sysctl")
-        .args(["-n", "hw.memsize"])
-        .output()
-        .ok()
+    command_output_timeout("sysctl", &["-n", "hw.memsize"], Duration::from_millis(500))
         .and_then(|o| {
             std::str::from_utf8(&o.stdout)
                 .ok()?
@@ -915,14 +922,39 @@ fn compute_cpu_usage(prev: &[(u64, u64)], cur: &[(u64, u64)]) -> Vec<f32> {
         .collect()
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub struct Sampler {
-    shared: Arc<Mutex<Metrics>>,
+#[derive(Clone, Default)]
+struct StaticSnapshot {
     gpu_cores: u32,
     dram_gb: u32,
     ssd_model: String,
-    _handles: Vec<std::thread::JoinHandle<()>>,
+}
+
+fn spawn_periodic(
+    handles: &mut Vec<std::thread::JoinHandle<()>>,
+    running: &Arc<AtomicBool>,
+    period: Duration,
+    mut tick: impl FnMut() + Send + 'static,
+) {
+    let running = running.clone();
+    handles.push(std::thread::spawn(move || {
+        // Why this helper exists:
+        // it enforces one shutdown policy for all sources, so we don't end up
+        // with subtly different loop/exit behaviors across threads.
+        while running.load(Ordering::Relaxed) {
+            tick();
+            std::thread::sleep(period);
+        }
+    }));
+}
+
+pub struct Sampler {
+    shared: Arc<Mutex<Metrics>>,
+    static_snapshot: StaticSnapshot,
+    running: Arc<AtomicBool>,
+    handles: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl Sampler {
@@ -946,18 +978,25 @@ impl Sampler {
             dram_gb,
             ..Default::default()
         }));
+        let static_snapshot = StaticSnapshot {
+            gpu_cores,
+            dram_gb,
+            ssd_model,
+        };
+        let running = Arc::new(AtomicBool::new(true));
         let mut handles = Vec::new();
         let dt = Duration::from_millis(interval_ms.max(100));
 
         // ── IOReport (SoC power + frequencies) ───────────────────────────
         {
             let m = shared.clone();
+            let running = running.clone();
             handles.push(std::thread::spawn(move || {
                 let Some(ior) = IOReportSampler::new().ok() else {
                     return;
                 };
                 let mut prev = ior.sample().ok();
-                loop {
+                while running.load(Ordering::Relaxed) {
                     std::thread::sleep(dt);
                     if let Ok(cur) = ior.sample() {
                         if let Some(ref p) = prev {
@@ -976,6 +1015,7 @@ impl Sampler {
         // ── SMC (temps, fans, system power) ──────────────────────────────
         {
             let m = shared.clone();
+            let running = running.clone();
             handles.push(std::thread::spawn(move || {
                 let Some(mut smc) = SmcConnection::open().ok() else {
                     return;
@@ -983,7 +1023,7 @@ impl Sampler {
                 let mut disc_handle: Option<std::thread::JoinHandle<Vec<(String, String)>>> =
                     Some(smc.start_temp_discovery());
                 let mut prev_ticks = read_cpu_ticks();
-                loop {
+                while running.load(Ordering::Relaxed) {
                     // Non-blocking: check if temp discovery finished
                     if let Some(ref h) = disc_handle {
                         if h.is_finished() {
@@ -1022,15 +1062,21 @@ impl Sampler {
                     }
                     std::thread::sleep(dt);
                 }
+                if let Some(h) = disc_handle.take() {
+                    if h.is_finished() {
+                        smc.finish_temp_discovery(h);
+                    }
+                }
             }));
         }
 
         // ── Battery ──────────────────────────────────────────────────────
         {
             let m = shared.clone();
+            let running = running.clone();
             handles.push(std::thread::spawn(move || {
                 let mut power_sma = crate::sma::TimeSma::new(300.0); // 5-minute window
-                loop {
+                while running.load(Ordering::Relaxed) {
                     let mut b = battery::read_battery();
                     if let Ok(mg) = m.lock() {
                         if b.present && !b.external_connected && mg.sys_power_w > 0.0 {
@@ -1067,7 +1113,8 @@ impl Sampler {
         {
             let m = shared.clone();
             let cal_max_ma = read_backlight_max_current_ma();
-            handles.push(std::thread::spawn(move || loop {
+            let running = running.clone();
+            handles.push(std::thread::spawn(move || while running.load(Ordering::Relaxed) {
                 let brightness = read_display_brightness();
                 let linear_br = read_display_linear_brightness();
                 let backlight_current = read_backlight_current();
@@ -1110,33 +1157,34 @@ impl Sampler {
         // ── Display EDR headroom (subprocess, every 5s) ─────────────────
         {
             let m = shared.clone();
-            handles.push(std::thread::spawn(move || loop {
+            let running = running.clone();
+            spawn_periodic(&mut handles, &running, Duration::from_secs(5), move || {
                 let edr = read_edr_headroom();
                 if let Ok(mut mg) = m.lock() {
                     mg.display.edr_headroom = edr;
                 }
-                std::thread::sleep(Duration::from_secs(5));
-            }));
+            });
         }
 
         // ── Keyboard backlight ───────────────────────────────────────────
         {
             let m = shared.clone();
-            handles.push(std::thread::spawn(move || loop {
+            let running = running.clone();
+            spawn_periodic(&mut handles, &running, dt, move || {
                 if let Some(kbd_level) = read_keyboard_brightness() {
                     if let Ok(mut mg) = m.lock() {
                         mg.keyboard.brightness_pct = kbd_level * 100.0;
                         mg.keyboard.estimated_power_w = kbd_level * MAX_KEYBOARD_W;
                     }
                 }
-                std::thread::sleep(dt);
-            }));
+            });
         }
 
         // ── Audio ────────────────────────────────────────────────────────
         {
             let m = shared.clone();
-            handles.push(std::thread::spawn(move || loop {
+            let running = running.clone();
+            spawn_periodic(&mut handles, &running, dt, move || {
                 let assertions = m
                     .lock()
                     .ok()
@@ -1146,16 +1194,16 @@ impl Sampler {
                 if let Ok(mut mg) = m.lock() {
                     mg.audio = audio;
                 }
-                std::thread::sleep(dt);
-            }));
+            });
         }
 
         // ── Network counters ─────────────────────────────────────────────
         {
             let m = shared.clone();
+            let running = running.clone();
             handles.push(std::thread::spawn(move || {
                 let mut prev: Option<(Instant, powermetrics::NetCounters)> = None;
-                loop {
+                while running.load(Ordering::Relaxed) {
                     let cur = powermetrics::read_net_counters();
                     if let Some((prev_time, ref prev_counters)) = prev {
                         let dt_s = prev_time.elapsed().as_secs_f64();
@@ -1205,7 +1253,8 @@ impl Sampler {
         // ── USB + Power assertions ───────────────────────────────────────
         {
             let m = shared.clone();
-            handles.push(std::thread::spawn(move || loop {
+            let running = running.clone();
+            spawn_periodic(&mut handles, &running, dt, move || {
                 let usb = peripherals::list_usb_devices();
                 let asserts = peripherals::list_power_assertions();
                 let usb_ports = battery::read_usb_power_out_per_port();
@@ -1215,45 +1264,45 @@ impl Sampler {
                     mg.usb_power_out_w = usb_ports.iter().map(|p| p.power_w).sum();
                     mg.usb_power_per_port = usb_ports;
                 }
-                std::thread::sleep(dt);
-            }));
+            });
         }
 
         // ── Bluetooth ────────────────────────────────────────────────────
         {
             let m = shared.clone();
-            handles.push(std::thread::spawn(move || loop {
+            let running = running.clone();
+            spawn_periodic(&mut handles, &running, dt, move || {
                 let devs = peripherals::read_bluetooth_devices();
                 let pw: f32 = devs.len() as f32 * BT_PERIPHERAL_W;
                 if let Ok(mut mg) = m.lock() {
                     mg.bluetooth_devices = devs;
                     mg.bluetooth_power_w = pw;
                 }
-                std::thread::sleep(dt);
-            }));
+            });
         }
 
         // ── WiFi + Ethernet ──────────────────────────────────────────────
         {
             let m = shared.clone();
-            handles.push(std::thread::spawn(move || loop {
+            let running = running.clone();
+            spawn_periodic(&mut handles, &running, dt, move || {
                 let wifi = peripherals::read_wifi_info();
                 let ethernet = peripherals::read_ethernet_info(&wifi.interface_name);
                 if let Ok(mut mg) = m.lock() {
                     mg.wifi = wifi;
                     mg.ethernet = ethernet;
                 }
-                std::thread::sleep(dt);
-            }));
+            });
         }
 
         // ── Disk I/O → SSD power estimation (IORegistry counters, no subprocess)
         {
             let m = shared.clone();
+            let running = running.clone();
             handles.push(std::thread::spawn(move || {
                 let mut prev = powermetrics::read_disk_counters();
                 let mut prev_time = Instant::now();
-                loop {
+                while running.load(Ordering::Relaxed) {
                     std::thread::sleep(dt);
                     let cur = powermetrics::read_disk_counters();
                     let now = Instant::now();
@@ -1276,6 +1325,7 @@ impl Sampler {
         // ── Per-process energy ───────────────────────────────────────────
         {
             let m = shared.clone();
+            let running = running.clone();
             handles.push(std::thread::spawn(move || {
                 // (name, energy_nj, session_mj, delta_nj, dt_s, last_seen, disk_r, disk_w, phys_mem)
                 #[allow(clippy::type_complexity)]
@@ -1286,7 +1336,7 @@ impl Sampler {
                 let mut proc_sma: std::collections::HashMap<i32, crate::sma::TimeSma> =
                     std::collections::HashMap::new();
                 let mut total_sma = crate::sma::TimeSma::new(5.0);
-                loop {
+                while running.load(Ordering::Relaxed) {
                     let cur = read_all_process_energy();
                     let net = powermetrics::read_proc_net_counters();
                     let now = Instant::now();
@@ -1380,10 +1430,9 @@ impl Sampler {
 
         Self {
             shared,
-            gpu_cores,
-            dram_gb,
-            ssd_model,
-            _handles: handles,
+            static_snapshot,
+            running,
+            handles,
         }
     }
 
@@ -1394,9 +1443,44 @@ impl Sampler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        m.gpu_cores = self.gpu_cores;
-        m.dram_gb = self.dram_gb;
-        m.ssd_model = self.ssd_model.clone();
+        // Why keep static fields outside shared mutex:
+        // they never change after startup, so reading them here avoids extra
+        // mutable traffic through the shared state that all workers contend on.
+        m.gpu_cores = self.static_snapshot.gpu_cores;
+        m.dram_gb = self.static_snapshot.dram_gb;
+        m.ssd_model = self.static_snapshot.ssd_model.clone();
         m
+    }
+}
+
+impl Drop for Sampler {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        for handle in self.handles.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_cpu_usage_returns_expected_percentages() {
+        let prev = vec![(100, 200), (80, 200)];
+        let cur = vec![(150, 300), (100, 200)];
+        let usage = compute_cpu_usage(&prev, &cur);
+        assert_eq!(usage.len(), 2);
+        assert!((usage[0] - 50.0).abs() < 1e-6);
+        assert_eq!(usage[1], 0.0);
+    }
+
+    #[test]
+    fn compute_cpu_usage_handles_counter_reset() {
+        let prev = vec![(1000, 2000)];
+        let cur = vec![(10, 20)];
+        let usage = compute_cpu_usage(&prev, &cur);
+        assert_eq!(usage, vec![0.0]);
     }
 }
