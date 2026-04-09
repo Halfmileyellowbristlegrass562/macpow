@@ -1123,43 +1123,46 @@ impl Sampler {
             let m = shared.clone();
             let cal_max_ma = read_backlight_max_current_ma();
             let running = running.clone();
-            handles.push(std::thread::spawn(move || while running.load(Ordering::Relaxed) {
-                let brightness = read_display_brightness();
-                let linear_br = read_display_linear_brightness();
-                let backlight_current = read_backlight_current();
-                if let Ok(mut mg) = m.lock() {
-                    if let Some(br) = brightness {
-                        mg.display.available = true;
-                        mg.display.brightness_pct = br * 100.0;
-                        mg.display.max_nits = max_nits;
-                        mg.display.nits = linear_br.unwrap_or(br) * max_nits;
-                        // Power from backlight current or linear estimate
-                        mg.display.estimated_power_w =
-                            if let Some((cur_ua, max_ua)) = backlight_current {
-                                if max_ua > 0 {
-                                    let frac = cur_ua as f32 / max_ua as f32;
-                                    let real_ma = frac * cal_max_ma;
-                                    real_ma / 1000.0 * BACKLIGHT_VOLTAGE_V
+            handles.push(std::thread::spawn(move || {
+                while running.load(Ordering::Relaxed) {
+                    let brightness = read_display_brightness();
+                    let linear_br = read_display_linear_brightness();
+                    let backlight_current = read_backlight_current();
+                    if let Ok(mut mg) = m.lock() {
+                        if let Some(br) = brightness {
+                            mg.display.available = true;
+                            mg.display.brightness_pct = br * 100.0;
+                            mg.display.max_nits = max_nits;
+                            mg.display.nits = linear_br.unwrap_or(br) * max_nits;
+                            // Power from backlight current or linear estimate
+                            mg.display.estimated_power_w =
+                                if let Some((cur_ua, max_ua)) = backlight_current {
+                                    if max_ua > 0 {
+                                        let frac = cur_ua as f32 / max_ua as f32;
+                                        let real_ma = frac * cal_max_ma;
+                                        real_ma / 1000.0 * BACKLIGHT_VOLTAGE_V
+                                    } else {
+                                        br * MAX_DISPLAY_W
+                                    }
                                 } else {
                                     br * MAX_DISPLAY_W
-                                }
-                            } else {
-                                br * MAX_DISPLAY_W
-                            };
-                        let display = unsafe { CGMainDisplayID() };
-                        mg.display.width_px = unsafe { CGDisplayPixelsWide(display) } as u32;
-                        mg.display.height_px = unsafe { CGDisplayPixelsHigh(display) } as u32;
-                        let size_mm = unsafe { CGDisplayScreenSize(display) };
-                        let diag_mm = (size_mm.width.powi(2) + size_mm.height.powi(2)).sqrt();
-                        mg.display.diagonal_inches = (diag_mm / 25.4 * 10.0).round() as f32 / 10.0;
-                    } else {
-                        mg.display.brightness_pct = 0.0;
-                        mg.display.estimated_power_w = 0.0;
-                        mg.display.nits = 0.0;
-                        mg.display.available = false;
+                                };
+                            let display = unsafe { CGMainDisplayID() };
+                            mg.display.width_px = unsafe { CGDisplayPixelsWide(display) } as u32;
+                            mg.display.height_px = unsafe { CGDisplayPixelsHigh(display) } as u32;
+                            let size_mm = unsafe { CGDisplayScreenSize(display) };
+                            let diag_mm = (size_mm.width.powi(2) + size_mm.height.powi(2)).sqrt();
+                            mg.display.diagonal_inches =
+                                (diag_mm / 25.4 * 10.0).round() as f32 / 10.0;
+                        } else {
+                            mg.display.brightness_pct = 0.0;
+                            mg.display.estimated_power_w = 0.0;
+                            mg.display.nits = 0.0;
+                            mg.display.available = false;
+                        }
                     }
+                    std::thread::sleep(dt);
                 }
-                std::thread::sleep(dt);
             }));
         }
 

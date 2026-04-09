@@ -1,5 +1,5 @@
-use macpow::sma::TimeSma;
 use macpow::process_utils::command_output_timeout;
+use macpow::sma::TimeSma;
 use macpow::types::*;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -3398,15 +3398,15 @@ fn read_machine_name() -> String {
         &["-n", "machdep.cpu.brand_string"],
         std::time::Duration::from_millis(500),
     )
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty());
+    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    .filter(|s| !s.is_empty());
     let model = command_output_timeout(
         "sysctl",
         &["-n", "hw.model"],
         std::time::Duration::from_millis(500),
     )
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty());
+    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    .filter(|s| !s.is_empty());
     match (chip, model) {
         (Some(c), Some(m)) => format!("{} ({})", c, m),
         (Some(c), None) => c,
